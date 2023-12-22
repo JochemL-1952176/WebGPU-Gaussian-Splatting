@@ -23,7 +23,6 @@ context.configure({
 const shaderCode = `
 struct Camera {
 	position: vec3f,
-	size: vec2f,
 	projection: mat4x4f,
 	view: mat4x4f
 };
@@ -48,7 +47,7 @@ struct FragmentIn {
 }
 
 @fragment fn fs(in: FragmentIn) -> @location(0) vec4f {
-	return vec4f(in.uv, 1 - length(in.uv), 1);
+	return vec4f(in.uv, 1.0 - length(in.uv), 1);
 }`
 
 const shaderModule = device.createShaderModule({
@@ -123,7 +122,6 @@ const renderPipelineLayout = device.createPipelineLayout({
 const renderPipelineDescriptor: GPURenderPipelineDescriptor = {
 	label: "Pipeline",
 	layout: renderPipelineLayout,
-	primitive: { topology: "triangle-list" },
 	vertex: {
 		module: shaderModule,
 		entryPoint: "vs",
@@ -149,7 +147,7 @@ var depthTexture = device.createTexture({
 });
 
 const camera = new OrbitCamera(
-	vec3.fromValues(0, 0, -4),
+	vec3.fromValues(0, -2, 2),
 	vec3.fromValues(0, 0, 0),
 	canvas,
 );
@@ -169,6 +167,8 @@ camera.onChange = () => {
 }
 
 const frame = () => {
+	camera.update();
+
 	const encoder = device.createCommandEncoder();
 	const renderPass = encoder.beginRenderPass({
 		colorAttachments: [{
@@ -201,7 +201,7 @@ const onResize = () => {
 	canvas.height = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight;
 
 	const projection = mat4.perspective(
-		utils.degToRad(45),
+		utils.degToRad(60),
 		canvas.width / canvas.height,
 		0.01, 1000
 	);
@@ -210,12 +210,6 @@ const onResize = () => {
 		uniformBuffer,
 		uniforms.views.projection.byteOffset,
 		projection as Float32Array
-	);
-
-	device.queue.writeBuffer(
-		uniformBuffer,
-		uniforms.views.size.byteOffset,
-		new Float32Array([canvas.width, canvas.height])
 	);
 
 	depthTexture = device.createTexture({
