@@ -1,53 +1,80 @@
 import { makeShaderDataDefinitions, makeStructuredView } from 'webgpu-utils';
 import { mat4, utils, vec3 } from 'wgpu-matrix';
 import { OrbitCamera } from './camera.js';
+import readPLY from './readPLY.js';
 
 if (!navigator.gpu) {
 	throw new Error("WebGPU not supported in this browser");
 }
+
 
 const adapter = await navigator.gpu.requestAdapter();
 if (!adapter) {
 	throw new Error("No GPUAdapter found");
 }
 
-const device = await adapter.requestDevice();
+/*
+* The maximum buffer size as reported by adapter.limits is only 256MiB,
+* which would only allow for a few million gaussians. This limit seems
+* arbitrarily chosen and doesn't seem to be hardware-related, so as long as the
+* device physically supports the requested amount of memory, the below code 
+* can be used to bypass this limit.
+*/
+const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize: 536870912 }});
 const canvas = document.querySelector("canvas")!;
 const context = canvas.getContext("webgpu")!;
 const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 context.configure({
 	device: device,
-	format: canvasFormat
+	format: canvasFormat,
+	alphaMode: 'premultiplied'
 });
 
+console.log(device.limits);
+
 const shaderCode = `
+const SH_dc = 0.28209479177387814f;
+
 struct Camera {
 	position: vec3f,
-	projection: mat4x4f,
-	view: mat4x4f
+	view: mat4x4f,
+	projection: mat4x4f
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
 
 struct VertexIn {
-	@location(0) pos: vec2f,
-	@location(1) uv: vec2f
+	@location(0) pos: vec3f,
+	@location(1) color: vec3f,
+	@location(2) scale: vec3f,
+	@location(3) rotation: vec4f
 };
 
 struct FragmentIn {
 	@builtin(position) pos: vec4f,
-	@location(0) uv: vec2f
+	@location(0) color: vec3f,
+	@location(2) uv: vec2f
 };
 
-@vertex fn vs(in: VertexIn) -> FragmentIn {
+@vertex fn vs(in: VertexIn, @builtin(vertex_index) vertexIndex: u32) -> FragmentIn {
+	let quad = array(vec2f(0, 0), vec2f(1, 0), vec2f(0, 1), vec2f(1, 1));
+	let size = 0.0015;
+
+	let uv = quad[vertexIndex];
+	let offset = (uv - 0.5) * size * 2.0;
+	let viewPos = (cam.view * vec4f(in.pos, 1)) + vec4f(offset, 0, 0);
+
 	return FragmentIn(
-		cam.projection * cam.view * vec4f(in.pos, 0, 1),
-		in.uv
+		cam.projection * viewPos,
+		0.5 + SH_dc * in.color,
+		uv
 	);
 }
 
 @fragment fn fs(in: FragmentIn) -> @location(0) vec4f {
-	return vec4f(in.uv, 1.0 - length(in.uv), 1);
+	let d = length(in.uv - vec2f(0.5));
+	if (d > 0.5) { discard; }
+	return vec4f(in.color, 1);
 }`
 
 const shaderModule = device.createShaderModule({
@@ -82,55 +109,63 @@ const bindGroup = device.createBindGroup({
 	}]
 });
 
-const vertexBufferLayout: GPUVertexBufferLayout = {
+const pointStride = 13;
+const pointDataLayout: GPUVertexBufferLayout = {
+	stepMode: 'instance',
 	attributes: [{
-		format: "float32x2",
+		shaderLocation: 0,
 		offset: 0,
-		shaderLocation: 0
+		format: "float32x3"
 	}, {
-		format: "float32x2",
-		offset: Float32Array.BYTES_PER_ELEMENT * 2,
-		shaderLocation: 1
+		shaderLocation: 1,
+		offset: 3 * Float32Array.BYTES_PER_ELEMENT,
+		format: 'float32x3'
+	}, {
+		shaderLocation: 2,
+		offset: 6 * Float32Array.BYTES_PER_ELEMENT,
+		format: 'float32x3'
+	}, {
+		shaderLocation: 3,
+		offset: 9 * Float32Array.BYTES_PER_ELEMENT,
+		format: 'float32x4'
 	}],
-	arrayStride: Float32Array.BYTES_PER_ELEMENT * 4
+	arrayStride: pointStride * Float32Array.BYTES_PER_ELEMENT
 };
 
-const vertices = new Float32Array([
-//   X     Y     U     V
-	-1.0, -1.0,  0.0,  0.0,
-	-1.0,  1.0,  0.0,  1.0,
-	 1.0, -1.0,  1.0,  0.0,
-	
-	 1.0, -1.0,  1.0,  0.0,
-	-1.0,  1.0,  0.0,  1.0,
-	 1.0,  1.0,  1.0,  1.0,
-]);
-
-const vertexBuffer = device.createBuffer({
-	label: "VBO",
-	size: vertices.byteLength,
+let numPoints = 0;
+let pointsBuffer = device.createBuffer({
 	usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-});
-
-device.queue.writeBuffer(vertexBuffer, 0, vertices);
-
-const renderPipelineLayout = device.createPipelineLayout({
-	label: "Pipeline layout",
-	bindGroupLayouts: [bindGroupLayout]
+	size: 0
 });
 
 const renderPipelineDescriptor: GPURenderPipelineDescriptor = {
 	label: "Pipeline",
-	layout: renderPipelineLayout,
+	layout: device.createPipelineLayout({
+		label: "Pipeline layout",
+		bindGroupLayouts: [bindGroupLayout]
+	}),
+	primitive: { topology: 'triangle-strip' },
 	vertex: {
 		module: shaderModule,
 		entryPoint: "vs",
-		buffers: [vertexBufferLayout]
+		buffers: [pointDataLayout]
 	},
 	fragment: {
 		module: shaderModule,
 		entryPoint: "fs",
-		targets: [{ format: canvasFormat }]
+		targets: [{
+			format: canvasFormat,
+			blend: {
+				alpha: {
+					srcFactor: 'one',
+					dstFactor: 'one-minus-src-alpha'
+				},
+				color: {
+					srcFactor: 'src-alpha',
+					dstFactor: 'one-minus-src-alpha'
+				}
+			}
+		}]
 	},
 	depthStencil: {
 		depthWriteEnabled: true,
@@ -147,23 +182,21 @@ var depthTexture = device.createTexture({
 });
 
 const camera = new OrbitCamera(
-	vec3.fromValues(0, -2, 2),
+	vec3.fromValues(0, 0, 1),
 	vec3.fromValues(0, 0, 0),
 	canvas,
 );
 
 camera.onChange = () => {
-	device.queue.writeBuffer(
-		uniformBuffer,
-		uniforms.views.view.byteOffset,
-		camera.getViewMatrix() as Float32Array
-	);
+	uniforms.set({ view: camera.getViewMatrix(), position: camera.position });
 
 	device.queue.writeBuffer(
 		uniformBuffer,
 		uniforms.views.position.byteOffset,
-		camera.position as Float32Array
-	)
+		uniforms.arrayBuffer,
+		uniforms.views.position.byteOffset,
+		uniforms.views.projection.byteOffset
+	);
 }
 
 const frame = () => {
@@ -187,9 +220,9 @@ const frame = () => {
 	
 	renderPass.setPipeline(renderPipeline);
 	renderPass.setBindGroup(0, bindGroup);
-	renderPass.setVertexBuffer(0, vertexBuffer);
+	renderPass.setVertexBuffer(0, pointsBuffer);
 	
-	renderPass.draw(vertices.byteLength / vertexBufferLayout.arrayStride);
+	renderPass.draw(4, numPoints);
 	
 	renderPass.end();
 	device.queue.submit([encoder.finish()]);
@@ -222,3 +255,26 @@ const onResize = () => {
 window.onresize = onResize;
 onResize();
 requestAnimationFrame(frame);
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+	document.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); }, false)
+});
+
+document.ondrop = async (e) => {
+	const files = e.dataTransfer?.files;
+	if (files) {
+		const begin = performance.now();
+		console.log(`Begin reading file: ${files[0].name}`);
+		const {header, data} = await readPLY(files[0]);
+		const end = performance.now();
+		numPoints = header.vertexCount;
+		console.log(`Read ${numPoints} points in ${((end - begin) / 1000).toFixed(2)}s`);
+
+		pointsBuffer = device.createBuffer({
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			size: data.byteLength
+		});
+
+		device.queue.writeBuffer(pointsBuffer, 0, data);
+	}
+}
