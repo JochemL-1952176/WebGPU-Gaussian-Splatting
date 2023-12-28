@@ -2,25 +2,17 @@ import { makeShaderDataDefinitions, makeStructuredView } from 'webgpu-utils';
 import { mat4, utils, vec3 } from 'wgpu-matrix';
 import { OrbitCamera } from './camera.js';
 import readPLY from './readPLY.js';
+import shaderCode from './shaders/gsplat.wgsl?raw'
 
-if (!navigator.gpu) {
-	throw new Error("WebGPU not supported in this browser");
-}
-
-
+if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter();
-if (!adapter) {
-	throw new Error("No GPUAdapter found");
-}
+if (!adapter) { throw new Error("No GPUAdapter found"); }
 
-/*
-* The maximum buffer size as reported by adapter.limits is only 256MiB,
-* which would only allow for a few million gaussians. This limit seems
-* arbitrarily chosen and doesn't seem to be hardware-related, so as long as the
-* device physically supports the requested amount of memory, the below code 
-* can be used to bypass this limit.
-*/
-const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize: 536870912 }});
+const device = await adapter.requestDevice({ requiredLimits: {
+	maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+	maxBufferSize: 2 * Math.pow(1024, 3) // 2 GiB
+}});
+
 const canvas = document.querySelector("canvas")!;
 const context = canvas.getContext("webgpu")!;
 const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -30,69 +22,19 @@ context.configure({
 	alphaMode: 'premultiplied'
 });
 
-console.log(device.limits);
-
-const shaderCode = `
-const SH_dc = 0.28209479177387814f;
-
-struct Camera {
-	position: vec3f,
-	view: mat4x4f,
-	projection: mat4x4f
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
-
-struct VertexIn {
-	@location(0) pos: vec3f,
-	@location(1) color: vec3f,
-	@location(2) scale: vec3f,
-	@location(3) rotation: vec4f
-};
-
-struct FragmentIn {
-	@builtin(position) pos: vec4f,
-	@location(0) color: vec3f,
-	@location(2) uv: vec2f
-};
-
-@vertex fn vs(in: VertexIn, @builtin(vertex_index) vertexIndex: u32) -> FragmentIn {
-	let quad = array(vec2f(0, 0), vec2f(1, 0), vec2f(0, 1), vec2f(1, 1));
-	let size = 0.0015;
-
-	let uv = quad[vertexIndex];
-	let offset = (uv - 0.5) * size * 2.0;
-	let viewPos = (cam.view * vec4f(in.pos, 1)) + vec4f(offset, 0, 0);
-
-	return FragmentIn(
-		cam.projection * viewPos,
-		0.5 + SH_dc * in.color,
-		uv
-	);
-}
-
-@fragment fn fs(in: FragmentIn) -> @location(0) vec4f {
-	let d = length(in.uv - vec2f(0.5));
-	if (d > 0.5) { discard; }
-	return vec4f(in.color, 1);
-}`
-
-const shaderModule = device.createShaderModule({
-	label: "Shader",
-	code: shaderCode
-});
-
+const shaderModule = device.createShaderModule({ code: shaderCode });
 const shaderData = makeShaderDataDefinitions(shaderCode);
-const uniforms = makeStructuredView(shaderData.structs.Camera);
+const cameraUniforms = makeStructuredView(shaderData.structs.Camera);
+const gaussianUniforms = makeStructuredView(shaderData.structs.GaussianOffsets);
 
-const uniformBuffer = device.createBuffer({
-	label: "Uniforms",
-	size: uniforms.arrayBuffer.byteLength,
+const cameraUniformBuffer = device.createBuffer({
+	label: "Camera uniforms buffer",
+	size: cameraUniforms.arrayBuffer.byteLength,
 	usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 });
 
-const bindGroupLayout = device.createBindGroupLayout({
-	label: "Bind group layout",
+const cameraUniformsBindGroupLayout = device.createBindGroupLayout({
+	label: "Camera uniforms bind group layout",
 	entries: [{
 		binding: 0,
 		visibility: GPUShaderStage.VERTEX,
@@ -100,55 +42,66 @@ const bindGroupLayout = device.createBindGroupLayout({
 	}]
 });
 
-const bindGroup = device.createBindGroup({
-	label: "Bind group",
-	layout: bindGroupLayout,
+const uniformsBindGroup = device.createBindGroup({
+	label: "Camera uniforms bind group",
+	layout: cameraUniformsBindGroupLayout,
 	entries: [{
 		binding: 0,
-		resource: { buffer: uniformBuffer }
+		resource: { buffer: cameraUniformBuffer }
 	}]
 });
 
-const pointStride = 13;
-const pointDataLayout: GPUVertexBufferLayout = {
-	stepMode: 'instance',
-	attributes: [{
-		shaderLocation: 0,
-		offset: 0,
-		format: "float32x3"
+const GaussianBindGroupLayout = device.createBindGroupLayout({
+	label: "Gaussians bind group layout",
+	entries: [{
+		binding: 0,
+		visibility: GPUShaderStage.VERTEX,
+		buffer: { type: "read-only-storage" }
 	}, {
-		shaderLocation: 1,
-		offset: 3 * Float32Array.BYTES_PER_ELEMENT,
-		format: 'float32x3'
-	}, {
-		shaderLocation: 2,
-		offset: 6 * Float32Array.BYTES_PER_ELEMENT,
-		format: 'float32x3'
-	}, {
-		shaderLocation: 3,
-		offset: 9 * Float32Array.BYTES_PER_ELEMENT,
-		format: 'float32x4'
-	}],
-	arrayStride: pointStride * Float32Array.BYTES_PER_ELEMENT
-};
+		binding: 1,
+		visibility: GPUShaderStage.VERTEX,
+		buffer: { type: "uniform" }
+	}]
+});
 
 let numPoints = 0;
-let pointsBuffer = device.createBuffer({
-	usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-	size: 0
+const gaussianBufferDescriptor: GPUBufferDescriptor = {
+	label: "Gaussian data buffer",
+	usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+	size: Float32Array.BYTES_PER_ELEMENT
+}
+let gaussianBuffer = device.createBuffer(gaussianBufferDescriptor);
+
+const gaussianUniformBuffer = device.createBuffer({
+	label: "Gaussian offsets uniforms buffer",
+	usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+	size: gaussianUniforms.arrayBuffer.byteLength
 });
+
+const GaussianBindGroupDescriptor: GPUBindGroupDescriptor = {	
+	label: "Gaussians bind group",
+	layout: GaussianBindGroupLayout,
+	entries: [{
+		binding: 0,
+		resource: { buffer: gaussianBuffer }
+	}, {
+		binding: 1,
+		resource: { buffer: gaussianUniformBuffer }
+	}]
+};
+
+let gaussianBindGroup = device.createBindGroup(GaussianBindGroupDescriptor);
 
 const renderPipelineDescriptor: GPURenderPipelineDescriptor = {
 	label: "Pipeline",
 	layout: device.createPipelineLayout({
 		label: "Pipeline layout",
-		bindGroupLayouts: [bindGroupLayout]
+		bindGroupLayouts: [cameraUniformsBindGroupLayout, GaussianBindGroupLayout]
 	}),
 	primitive: { topology: 'triangle-strip' },
 	vertex: {
 		module: shaderModule,
-		entryPoint: "vs",
-		buffers: [pointDataLayout]
+		entryPoint: "vs"
 	},
 	fragment: {
 		module: shaderModule,
@@ -173,6 +126,7 @@ const renderPipelineDescriptor: GPURenderPipelineDescriptor = {
 		depthCompare: "less",
 	}
 }
+
 const renderPipeline = device.createRenderPipeline(renderPipelineDescriptor);
 
 var depthTexture = device.createTexture({
@@ -182,20 +136,20 @@ var depthTexture = device.createTexture({
 });
 
 const camera = new OrbitCamera(
-	vec3.fromValues(0, 0, 1),
+	vec3.fromValues(0, 0, -2),
 	vec3.fromValues(0, 0, 0),
 	canvas,
 );
 
 camera.onChange = () => {
-	uniforms.set({ view: camera.getViewMatrix(), position: camera.position });
+	cameraUniforms.set({ view: camera.getViewMatrix(), position: camera.position });
 
 	device.queue.writeBuffer(
-		uniformBuffer,
-		uniforms.views.position.byteOffset,
-		uniforms.arrayBuffer,
-		uniforms.views.position.byteOffset,
-		uniforms.views.projection.byteOffset
+		cameraUniformBuffer,
+		cameraUniforms.views.position.byteOffset,
+		cameraUniforms.arrayBuffer,
+		cameraUniforms.views.position.byteOffset,
+		cameraUniforms.views.projection.byteOffset
 	);
 }
 
@@ -219,8 +173,8 @@ const frame = () => {
 	});
 	
 	renderPass.setPipeline(renderPipeline);
-	renderPass.setBindGroup(0, bindGroup);
-	renderPass.setVertexBuffer(0, pointsBuffer);
+	renderPass.setBindGroup(0, uniformsBindGroup);
+	renderPass.setBindGroup(1, gaussianBindGroup);
 	
 	renderPass.draw(4, numPoints);
 	
@@ -233,6 +187,8 @@ const onResize = () => {
 	canvas.width = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth;
 	canvas.height = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight;
 
+	console.log(`Canvas dimensions: ${canvas.width}x${canvas.height}`);
+
 	const projection = mat4.perspective(
 		utils.degToRad(60),
 		canvas.width / canvas.height,
@@ -240,8 +196,8 @@ const onResize = () => {
 	);
 	
 	device.queue.writeBuffer(
-		uniformBuffer,
-		uniforms.views.projection.byteOffset,
+		cameraUniformBuffer,
+		cameraUniforms.views.projection.byteOffset,
 		projection as Float32Array
 	);
 
@@ -252,7 +208,11 @@ const onResize = () => {
 	});
 }
 
-window.onresize = onResize;
+window.onresize = () => {
+	console.log("Resizing");
+	onResize();
+};
+
 onResize();
 requestAnimationFrame(frame);
 
@@ -263,18 +223,37 @@ requestAnimationFrame(frame);
 document.ondrop = async (e) => {
 	const files = e.dataTransfer?.files;
 	if (files) {
-		const begin = performance.now();
 		console.log(`Begin reading file: ${files[0].name}`);
+		let begin = performance.now();
 		const {header, data} = await readPLY(files[0]);
-		const end = performance.now();
+		let end = performance.now();
+		console.log(header);
 		numPoints = header.vertexCount;
 		console.log(`Read ${numPoints} points in ${((end - begin) / 1000).toFixed(2)}s`);
 
-		pointsBuffer = device.createBuffer({
-			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-			size: data.byteLength
+		gaussianBuffer.destroy();
+		gaussianBufferDescriptor.size = data.byteLength;
+		gaussianBuffer = device.createBuffer(gaussianBufferDescriptor);
+
+		console.log(`Uploading ${data.byteLength} bytes to GPU`);
+		begin = performance.now();
+		device.queue.writeBuffer(gaussianBuffer, 0, data);
+		end = performance.now();
+		console.log(`Uploading took ${((end - begin) / 1000).toFixed(2)}s`);
+		
+		GaussianBindGroupDescriptor.entries[0].resource.buffer = gaussianBuffer;
+		gaussianBindGroup = device.createBindGroup(GaussianBindGroupDescriptor);
+
+		gaussianUniforms.set({
+			stride: header.stride,
+			pos: header.properties["x"].offset,
+			normal: header.properties["nx"].offset,
+			opacity: header.properties["opacity"].offset,
+			scale: header.properties["scale_0"].offset,
+			rotation: header.properties["rot_0"].offset,
+			sh: header.properties["f_dc_0"].offset,
 		});
 
-		device.queue.writeBuffer(pointsBuffer, 0, data);
+		device.queue.writeBuffer(gaussianUniformBuffer, 0, gaussianUniforms.arrayBuffer);
 	}
 }

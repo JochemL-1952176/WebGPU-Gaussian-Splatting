@@ -1,12 +1,4 @@
-import { mat4, vec2, Vec2, vec3, Vec3 } from "wgpu-matrix";
-
-function sphericalToCartesian(thetaPhi: Vec2, r: number) {
-	return vec3.fromValues(
-		r * Math.sin(thetaPhi[0]) * Math.cos(thetaPhi[1]),
-		r * Math.cos(thetaPhi[0]),
-		r * Math.sin(thetaPhi[0]) * Math.sin(thetaPhi[1])
-	)
-}
+import { mat4, Quat, quat, vec2, Vec2, vec3, Vec3 } from "wgpu-matrix";
 
 function cartesianToSpherical(xyz: Vec3) {
 	const r = vec3.length(xyz);
@@ -21,8 +13,7 @@ function cartesianToSpherical(xyz: Vec3) {
 
 export class OrbitCamera {
 	#distance: number;
-	#rotation: Vec2;
-	#forward: Vec3;
+	#rotationQuat: Quat;
 	#right: Vec3;
 	#up: Vec3 = vec3.fromValues(0, -1, 0);
 
@@ -54,27 +45,27 @@ export class OrbitCamera {
 
 		const fromTarget = vec3.sub(this.#position, this.#target);
 
-		let { thetaPhi, r } = cartesianToSpherical(fromTarget)
-		this.#rotation = thetaPhi, this.#distance = r;
+		let { thetaPhi, r } = cartesianToSpherical(fromTarget);
+		this.#distance = r;
+		this.#rotationQuat = quat.fromEuler(Math.PI / 2 - thetaPhi[1], Math.PI / 2 - thetaPhi[0], 0, 'yxz');
+		const R = mat4.fromQuat(this.#rotationQuat);
 
-		this.#forward = vec3.normalize(vec3.sub(this.#target, this.#position));
-		this.#right = vec3.cross(this.#forward, this.#up);
+		this.#right = vec3.transformMat4(vec3.fromValues(1, 0, 0), R);
+		this.#up = vec3.transformMat4(vec3.fromValues(0, 1, 0), R);
 
 		domElement.oncontextmenu = (e) => e.preventDefault();
 		domElement.onwheel = (e) => { this.#zoomVelocity -= OrbitCamera.#zoomSensitivity * Math.sign(e.deltaY); } ;
 		domElement.onmousemove = (e) => {
 			switch (e.buttons) {
 				case 1: // Left mouse button
-
-
 					vec2.scale(
-						vec2.fromValues(e.movementX, e.movementY),
+						vec2.fromValues(-e.movementX, e.movementY),
 						OrbitCamera.#panSensitivity,
 						this.#panningVelocity);
 					break;
 				case 2: // Right mouse button
 					vec2.scale(
-						vec2.fromValues(-e.movementY, e.movementX),
+						vec2.fromValues(-e.movementX, -e.movementY),
 						OrbitCamera.#rotateSensitivity,
 						this.#rotationVelocity);
 					break;
@@ -82,27 +73,22 @@ export class OrbitCamera {
 		}
 	}
 
-	getViewMatrix() {
-		return mat4.lookAt(this.#position, this.#target, this.#up);
-	}
-
+	getViewMatrix() { return mat4.lookAt(this.#position, this.#target, this.#up); }
 	update() {
 		this.#rotate(this.#rotationVelocity);
 		this.#pan(this.#panningVelocity);
 		this.#zoom(this.#zoomVelocity);
-
-		this.#rotation[0] = Math.max(0.001, Math.min(Math.PI - 0.001, this.#rotation[0] % 180));
-		this.#rotation[1] = this.#rotation[1] % 360;
 
 		const cmpEpsilon = (v: number) => Math.abs(v) > 0.0001;
 		if (this.#rotationVelocity.some(cmpEpsilon) ||
 			this.#panningVelocity.some(cmpEpsilon) ||
 			cmpEpsilon(this.#zoomVelocity)
 		) {
-			vec3.add(this.#target, sphericalToCartesian(this.#rotation, this.#distance), this.position);
-			vec3.normalize(vec3.sub(this.#target, this.#position), this.#forward);
-			vec3.cross(this.#forward, this.#up, this.#right);
-			
+			const R = mat4.fromQuat(this.#rotationQuat);
+			vec3.add(this.#target, vec3.transformMat4(vec3.fromValues(0, 0, this.#distance), R), this.position);
+			this.#right = vec3.transformMat4(vec3.fromValues(1, 0, 0), R);
+			this.#up = vec3.transformMat4(vec3.fromValues(0, 1, 0), R);
+
 			this.#onChange();
 
 			vec3.scale(this.#rotationVelocity, this.#dragCoefficient, this.#rotationVelocity);
@@ -115,14 +101,18 @@ export class OrbitCamera {
 		}
 	}
 
-	#rotate(delta: Vec2) { vec2.sub(this.#rotation, delta, this.#rotation); }
-	#zoom(amount: number) { this.#distance = Math.max(0.1, this.#distance - amount); }
-
 	#pan(delta: Vec2) {
-		const pan = vec3.scale(this.#right, -delta[0] * this.#distance);
-		vec3.addScaled(pan, vec3.cross(this.#right, this.#forward), delta[1] * this.#distance, pan);
+		const pan = vec3.scale(this.#right, delta[0] * this.#distance);
+		vec3.addScaled(pan, this.#up, delta[1] * this.#distance, pan);
 
 		vec3.add(this.#target, pan, this.#target);
 		vec3.add(this.#position, pan, this.#position);
 	}
+
+	#rotate(delta: Vec2) {
+		const deltaRotation = quat.fromEuler(delta[1], delta[0], 0, 'yxz');
+		quat.multiply(this.#rotationQuat, deltaRotation, this.#rotationQuat);
+	}
+
+	#zoom(amount: number) { this.#distance = Math.max(0.1, this.#distance - amount); }
 }
