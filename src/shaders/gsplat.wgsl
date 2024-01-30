@@ -1,4 +1,32 @@
-const SH_dc = 0.28209479177387814f;
+// Adapted from
+// https://github.com/graphdeco-inria/diff-gaussian-rasterization/blob/main/cuda_rasterizer
+const PI = radians(180);
+const Y00 = 0.5 * sqrt(1 / PI);
+const Y1X = sqrt(3 / (4 * PI));
+const Y2 = array(
+	 0.5 * sqrt(15 / PI),
+	-0.5 * sqrt(15 / PI),
+	 0.25 * sqrt(5 / PI),
+	-0.5 * sqrt(15 / PI),
+	 0.25 * sqrt(15 / PI)
+);
+
+const Y3 = array(
+	-0.25 * sqrt(35 / (2 * PI)),
+	 0.5 * sqrt(105 / PI),
+	-0.25 * sqrt(21 / (2 * PI)),
+	 0.25 * sqrt(7 / PI),
+	-0.25 * sqrt(21 / (2 * PI)),
+	 0.25 * sqrt(105 / PI),
+	-0.25 * sqrt(35 / (2 * PI))
+);
+
+const stride = 59;
+const posOffset = 0;
+const shOffset = 3;
+const opacityOffset = 51;
+const scaleOffset = 52;
+const rotationOffset = 55;
 
 struct Camera {
 	position: vec3f,
@@ -8,66 +36,53 @@ struct Camera {
 
 @group(0) @binding(0) var<uniform> cam: Camera;
 
-struct GaussianOffsets {
-	stride: u32,
-	pos: u32,
-	normal: u32,
-	opacity: u32,
-	scale: u32,
-	rotation: u32,
-	sh: u32,
-};
-
 // Use flat array to bypass struct padding
 @group(1) @binding(0) var<storage, read> gaussianData: array<f32>;
-@group(1) @binding(1) var<uniform> gaussianOffset: GaussianOffsets;
-
-struct Gaussian {
-	pos: vec3f,
-	normal: vec3f,
-	opacity: f32,
-	scale: vec3f,
-	rotation: vec4f,
-	sh: array<vec3f, 16>
-};
 
 fn readVec3(offset: u32) -> vec3f {
-	let x = gaussianData[offset];
-	let y = gaussianData[offset + 1];
-	let z = gaussianData[offset + 2];
-
-	return vec3f(x, y, z);
+	return vec3f(
+		gaussianData[offset],
+		gaussianData[offset + 1],
+		gaussianData[offset + 2]);
 }
 
 fn readVec4(offset: u32) -> vec4f {
-	let x = gaussianData[offset];
-	let y = gaussianData[offset + 1];
-	let z = gaussianData[offset + 2];
-	let w = gaussianData[offset + 3];
-
-	return vec4f(x, y, z, w);
+	return vec4f(
+		gaussianData[offset],
+		gaussianData[offset + 1],
+		gaussianData[offset + 2],
+		gaussianData[offset + 3]);
 }
 
-fn sigmoid(x: f32) -> f32 {
-	return 1 / (1 + exp(-x));
-}
+// TODO: only dc works correctly, make it make sense
+fn computeColorFromSH(pos: vec3f, baseIndex: u32) -> vec3f {
+	let shIndex = baseIndex + shOffset;
+	let dir = normalize(pos - cam.position);
+	var color = Y00 * readVec3(shIndex);
 
-fn readGaussian(index: u32) -> Gaussian {
-	let baseOffset = index * gaussianOffset.stride;
+	// first degree
+	let x = dir.x; let y = dir.y; let z = dir.z;
+	color += Y1X * (-y * readVec3(shIndex + 3) + z * readVec3(shIndex + 6) - x * readVec3(shIndex + 9));
 
-	var sh = array<vec3f, 16>();
-	for (var i: u32 = 0; i < 16; i = i + 1) {
-		sh[i] = readVec3(baseOffset + gaussianOffset.sh + i * 12);
-	}
+	// second degree
+	let xx = x*x; let yy = y*y; let zz = z*z;
+	let xy = x*y; let yz = y*z; let xz = x*z;
+	color += Y2[0] * xy * readVec3(shIndex + 12) +
+			 Y2[1] * yz * readVec3(shIndex + 15) +
+			 Y2[2] * (2 * zz - xx - yy) * readVec3(shIndex + 18) +
+			 Y2[3] * xz * readVec3(shIndex + 21) +
+			 Y2[4] * (xx - yy) * readVec3(shIndex + 24);
 
-	return Gaussian(
-		readVec3(baseOffset + gaussianOffset.pos),
-		readVec3(baseOffset + gaussianOffset.normal),
-		sigmoid(gaussianData[baseOffset + gaussianOffset.opacity]),
-		exp2(readVec3(baseOffset + gaussianOffset.scale)),
-		readVec4(baseOffset + gaussianOffset.rotation),
-		sh
-	);
+	// third degree
+	color += Y3[0] * y * (3 * xx - yy) * readVec3(shIndex + 27) +
+			 Y3[1] * xy * z * readVec3(shIndex + 30) +
+			 Y3[2] * y * (4 * zz - xx - yy) * readVec3(shIndex + 33) +
+			 Y3[3] * z * (2 * zz - 3 * (xx - yy)) * readVec3(shIndex + 36) +
+			 Y3[4] * x * (4 * zz - xx - yy) * readVec3(shIndex + 39) +
+			 Y3[5] * z * (xx - yy) * readVec3(shIndex + 42) +
+			 Y3[6] * x * (xx - 3 * yy) * readVec3(shIndex + 45);
+
+	return saturate(color + 0.5);
 }
 
 struct VertexIn {
@@ -83,19 +98,23 @@ struct VertexOut {
 };
 
 @vertex fn vs(in: VertexIn) -> VertexOut {
-	let quad = array(vec2f(0, 0), vec2f(1, 0), vec2f(0, 1), vec2f(1, 1));
+	const quad = array(vec2f(0, 0), vec2f(1, 0), vec2f(0, 1), vec2f(1, 1));
+	const size = 0.005;
 
-	let gaussian = readGaussian(in.instanceIndex);
+	let baseIndex = in.instanceIndex * stride;
+	let pos = readVec3(baseIndex + posOffset);
+	let opacity = gaussianData[baseIndex + opacityOffset];
+	let scale = readVec3(baseIndex + scaleOffset);
+	let rotation = readVec4(baseIndex + rotationOffset);
 	
-	let size = 0.005;
 	let uv = quad[in.vertexIndex];
 	let offset = (uv - 0.5) * size * 2.0;
-	let viewPos = (cam.view * vec4f(gaussian.pos, 1)) + vec4f(offset, 0, 0);
+	let viewPos = (cam.view * vec4f(pos, 1)) + vec4f(offset, 0, 0);
 
 	return VertexOut(
 		cam.projection * viewPos,
-		0.5 + SH_dc * gaussian.sh[0],
-		gaussian.opacity,
+		computeColorFromSH(pos, baseIndex),
+		opacity,
 		uv
 	);
 }

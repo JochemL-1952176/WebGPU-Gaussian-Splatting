@@ -1,13 +1,15 @@
-type Format = 'char' | 'uchar' | 'int8' | 'uint8' | 'short' | 'ushort' | 'int16' | 'uint16' | 'int' | 'uint' | 'int32' | 'uint32' | 'float' | 'float32' | 'double' | 'float64'
-type Properties = {
-	[key: string]: {
-		offset: number,
-		size: number,
-		format: Format
-	}
-}
+export type PropertyType = 'char' | 'uchar' | 'int8' | 'uint8' | 'short' | 'ushort' | 'int16' | 'uint16' | 'int' | 'uint' | 'int32' | 'uint32' | 'float' | 'float32' | 'double' | 'float64'
+export type Format = 'ascii' | 'binary_little_endian' | 'binary_big_endian';
+export type Properties = Record<string, {offset: number, type: PropertyType}>;
 
-function formatSize(format: Format) {
+export type PLYHeader = {
+	vertexCount: number,
+	format: Format,
+	properties: Properties,
+	stride: number
+};
+
+export function formatSize(format: PropertyType) {
 	switch (format) {
 		case 'char':
 		case 'int8':
@@ -38,32 +40,27 @@ function formatSize(format: Format) {
 	}
 }
 
-interface PLYHeader {
-	vertexCount: number,
-	endianness: 'big' | 'little',
-	properties: Properties,
-	stride: number
-}
-
 function parsePLYHeader(buffer: ArrayBuffer) {
 	let headerString = '';
+	const chunkSize = 64;
 	
 	const ENDHEADER = 'end_header';
 	let headerOffset = 0;
 	const decoder = new TextDecoder('utf8');
 	while (true) {
-		const chunk = new Uint8Array(buffer, headerOffset, 64);
+		const chunk = new Uint8Array(buffer, headerOffset, chunkSize);
 		headerString += decoder.decode(chunk);
-		headerOffset += 64;
+		headerOffset += chunkSize;
 		if (headerString.includes(ENDHEADER)) {
 			headerString = headerString.slice(0, headerString.indexOf(ENDHEADER) + ENDHEADER.length);
 			break;
 		};
 	}
+	console.assert(headerOffset < buffer.byteLength);
 
 	let header: PLYHeader = {
 		vertexCount: 0,
-		endianness: 'little',
+		format: 'binary_little_endian',
 		properties: {},
 		stride: 0
 	};
@@ -72,27 +69,29 @@ function parsePLYHeader(buffer: ArrayBuffer) {
 		line = line.trim();
 
 		if (line.startsWith('format')) {
-			const format = line.split(' ')[1];
-			header.endianness = format === 'binary_little_endian' ? 'little' : 'big';
+			header.format = line.split(' ')[1] as Format;
+
 		} else if (line.startsWith('element vertex')) {
 			header.vertexCount = parseInt(line.split(' ')[2]);
+
 		} else if (line.startsWith('property')) {
-			const [propertyType, propertyName] = line.split(' ').slice(1) as [Format, string];
+			const [propertyType, propertyName] = line.split(' ').slice(1) as [PropertyType, string];
 			const size = formatSize(propertyType);
+
 			header.properties[propertyName] = {
-				size,
 				offset: header.stride,
-				format: propertyType
+				type: propertyType
 			};
-			header.stride++;
+
+			header.stride += size;
 		}
 	}
 
 	return { header, dataOffset: headerString.length + 1 };
 }
 
-export default async function readPLY(file: File) {
+export default async function readPLY(file: Blob) {
 	const data = await file.arrayBuffer();
 	const {header, dataOffset} = parsePLYHeader(data);
-	return {header, data: new Float32Array(data.slice(dataOffset))};
-} 
+	return {header, data: new DataView(data, dataOffset)};
+}

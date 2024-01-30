@@ -1,4 +1,4 @@
-import { mat4, Quat, quat, vec2, Vec2, vec3, Vec3 } from "wgpu-matrix";
+import { Mat4, mat4, Quat, quat, vec2, Vec2, vec3, Vec3 } from "wgpu-matrix";
 
 function cartesianToSpherical(xyz: Vec3) {
 	const r = vec3.length(xyz);
@@ -45,13 +45,14 @@ export class OrbitCamera {
 
 		const fromTarget = vec3.sub(this.#position, this.#target);
 
-		let { thetaPhi, r } = cartesianToSpherical(fromTarget);
+		console.log(position);
+		const { thetaPhi, r } = cartesianToSpherical(fromTarget);
 		this.#distance = r;
-		this.#rotationQuat = quat.fromEuler(Math.PI / 2 - thetaPhi[1], Math.PI / 2 - thetaPhi[0], 0, 'yxz');
+		this.#rotationQuat = quat.fromEuler(thetaPhi[1] + (Math.PI / 2), (Math.PI / 2) + thetaPhi[0], 0, 'yxz');
 		const R = mat4.fromQuat(this.#rotationQuat);
 
 		this.#right = vec3.transformMat4(vec3.fromValues(1, 0, 0), R);
-		this.#up = vec3.transformMat4(vec3.fromValues(0, 1, 0), R);
+		this.#up = vec3.transformMat4(vec3.fromValues(0, -1, 0), R);
 
 		domElement.oncontextmenu = (e) => e.preventDefault();
 		domElement.onwheel = (e) => { this.#zoomVelocity -= OrbitCamera.#zoomSensitivity * Math.sign(e.deltaY); } ;
@@ -59,13 +60,13 @@ export class OrbitCamera {
 			switch (e.buttons) {
 				case 1: // Left mouse button
 					vec2.scale(
-						vec2.fromValues(-e.movementX, e.movementY),
+						vec2.fromValues(e.movementX, e.movementY),
 						OrbitCamera.#panSensitivity,
 						this.#panningVelocity);
 					break;
 				case 2: // Right mouse button
 					vec2.scale(
-						vec2.fromValues(-e.movementX, -e.movementY),
+						vec2.fromValues(e.movementX, e.movementY),
 						OrbitCamera.#rotateSensitivity,
 						this.#rotationVelocity);
 					break;
@@ -73,7 +74,7 @@ export class OrbitCamera {
 		}
 	}
 
-	getViewMatrix() { return mat4.lookAt(this.#position, this.#target, this.#up); }
+	getViewMatrix(target?: Mat4) { return mat4.lookAt(this.#position, this.#target, this.#up, target); }
 	update() {
 		this.#rotate(this.#rotationVelocity);
 		this.#pan(this.#panningVelocity);
@@ -87,7 +88,7 @@ export class OrbitCamera {
 			const R = mat4.fromQuat(this.#rotationQuat);
 			vec3.add(this.#target, vec3.transformMat4(vec3.fromValues(0, 0, this.#distance), R), this.position);
 			this.#right = vec3.transformMat4(vec3.fromValues(1, 0, 0), R);
-			this.#up = vec3.transformMat4(vec3.fromValues(0, 1, 0), R);
+			this.#up = vec3.transformMat4(vec3.fromValues(0, -1, 0), R);
 
 			this.#onChange();
 
