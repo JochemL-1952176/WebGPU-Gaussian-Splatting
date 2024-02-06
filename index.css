@@ -3,3 +3,25 @@ body, html {
 	padding: 0;
 	overflow: hidden;
 }
+
+#UI {
+	position: absolute;
+	top: 14px;
+	left: 10px;
+	display: flex;
+}
+
+input { display: none; }
+
+label {
+	cursor: pointer;
+	font-family: Arial, Helvetica, sans-serif;
+	border-radius: 4px;
+	padding: 8px 10px;
+	margin: 4px;
+	background-color: #ffffff;
+}
+
+label:hover {
+	background-color: #eaeaea;
+}

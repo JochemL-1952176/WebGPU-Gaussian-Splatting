@@ -20,14 +20,14 @@ export class OrbitCamera {
 	#position: Vec3;
 	#target: Vec3;
 	
-	#dragCoefficient: number = 0.95;
-	#rotationVelocity: Vec2 = vec2.fromValues(0, 0);
-	#panningVelocity: Vec2 = vec2.fromValues(0, 0);
-	#zoomVelocity: number = 0;
+	#drag = 8;
+	#rotationVelocity = vec2.fromValues(0, 0);
+	#panningVelocity = vec2.fromValues(0, 0);
+	#zoomVelocity = 0;
 
-	static #zoomSensitivity: number = 0.025;
-	static #rotateSensitivity: number = 0.002;
-	static #panSensitivity: number = 0.0008;
+	static #zoomSensitivity = 0.025;
+	static #rotateSensitivity = 0.002;
+	static #panSensitivity = 0.0008;
 
 	get position(): Vec3 {
 		return this.#position;
@@ -44,8 +44,6 @@ export class OrbitCamera {
 		this.#target = target;
 
 		const fromTarget = vec3.sub(this.#position, this.#target);
-
-		console.log(position);
 		const { thetaPhi, r } = cartesianToSpherical(fromTarget);
 		this.#distance = r;
 		this.#rotationQuat = quat.fromEuler(thetaPhi[1] + (Math.PI / 2), (Math.PI / 2) + thetaPhi[0], 0, 'yxz');
@@ -75,7 +73,7 @@ export class OrbitCamera {
 	}
 
 	getViewMatrix(target?: Mat4) { return mat4.lookAt(this.#position, this.#target, this.#up, target); }
-	update() {
+	update(deltaTime: number) {
 		this.#rotate(this.#rotationVelocity);
 		this.#pan(this.#panningVelocity);
 		this.#zoom(this.#zoomVelocity);
@@ -92,9 +90,9 @@ export class OrbitCamera {
 
 			this.#onChange();
 
-			vec3.scale(this.#rotationVelocity, this.#dragCoefficient, this.#rotationVelocity);
-			vec3.scale(this.#panningVelocity, this.#dragCoefficient, this.#panningVelocity);
-			this.#zoomVelocity *= this.#dragCoefficient;
+			vec3.scale(this.#rotationVelocity, 1 - this.#drag * deltaTime, this.#rotationVelocity);
+			vec3.scale(this.#panningVelocity, 1 - this.#drag * deltaTime, this.#panningVelocity);
+			this.#zoomVelocity *= 1 - this.#drag * deltaTime;
 		} else {
 			this.#rotationVelocity.fill(0);
 			this.#panningVelocity.fill(0);
