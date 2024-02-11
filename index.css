@@ -1,27 +1,58 @@
+* { margin: 0; }
+
 body, html {
-	margin: 0;
 	padding: 0;
 	overflow: hidden;
 }
 
-#UI {
-	position: absolute;
-	top: 14px;
-	left: 10px;
+.flex-column {
 	display: flex;
+	flex-flow: column nowrap;
 }
 
-input { display: none; }
+.flex-row {
+	display: flex;
+	flex-flow: row nowrap;
+}
 
-label {
-	cursor: pointer;
-	font-family: Arial, Helvetica, sans-serif;
+#UI {
+	position: absolute;
+	top: 18px;
+	left: 8px;
+}
+
+input[type=file] { display: none; }
+
+.button, #controls {
 	border-radius: 4px;
-	padding: 8px 10px;
-	margin: 4px;
+	margin-top: 16px;
 	background-color: #ffffff;
 }
 
-label:hover {
+.button {
+	padding: 8px 10px;
+}
+
+label, output {
+	font-family: Arial, Helvetica, sans-serif;
+}
+
+.button, input {
+	cursor: pointer;
+}
+
+.button:hover {
 	background-color: #eaeaea;
+}
+
+.option {
+	margin: 8px;
+}
+
+.option > .flex-row > input {
+	flex-grow: 1;
+}
+
+.option > .flex-row > output {
+	margin: 0 6px;
 }

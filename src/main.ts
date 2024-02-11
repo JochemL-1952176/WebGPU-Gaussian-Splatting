@@ -1,102 +1,9 @@
 import { makeShaderDataDefinitions, makeStructuredView } from 'webgpu-utils';
 import { mat4, utils, vec2, vec3 } from 'wgpu-matrix';
-import { OrbitCamera } from './camera.js';
-import readPLY from './readPLY.js';
+import { OrbitController } from './controls.js';
+import debugGaussiansURL from './assets/default.ply?url' 
 import shaderCode from './shaders/gsplat.wgsl?raw'
-
-async function loadGaussianData(ply: Blob) {
-	console.debug(`Begin reading Gaussian data`);
-	let begin = performance.now();
-	
-	const {header, data: dataView} = await readPLY(ply);
-	
-	let end = performance.now();
-	const count = header.vertexCount;
-	console.debug(`Read ${count} points in ${((end - begin) / 1000).toFixed(2)}s`);
-	console.debug(header);
-	
-	let filteredProperties = {
-		stride: 0,
-		properties: {} as Record<string, {
-			readOffset: number,
-			writeIndex: number,
-			operation: (((x: number) => number) | null)
-		}>
-	};
-	
-	const colorsperSH = 3;
-	const restSHCoeffs = Object.keys(header.properties).filter((v) => v.startsWith('f_rest_')).length / colorsperSH;
-	let baseRestIdx = 0;
-	for (const [name, {offset}] of Object.entries(header.properties)) {
-		// Ignore unused normal data
-		if (name.startsWith('n')) continue;
-
-		let writeIndex = filteredProperties.stride;
-
-		// For some reason, the sh components are stored as rrr...ggg...bbb
-		// We convert this to rgbrgbrgb... so that we can take a vec3 from contiguous memory in the vs
-
-		if (name.startsWith('f_rest_')) {
-			if (name === 'f_rest_0') { baseRestIdx = writeIndex; }
-			const restIdx = parseInt(name.split('_')[2]);
-			const SHIdx = restIdx % restSHCoeffs;
-			const colorIdx = Math.floor(restIdx / restSHCoeffs);
-			writeIndex = baseRestIdx + SHIdx * colorsperSH + colorIdx;
-		}
-
-		filteredProperties.properties[name] = {
-			readOffset: offset,
-			writeIndex,
-			operation: null
-		};
-		filteredProperties.stride++;
-		
-		switch (name) {
-			case 'opacity':
-				filteredProperties.properties[name].operation =
-					(x) => 1 / (1 + Math.exp(-x)); // logit -> linear
-				break;
-			case 'scale_0':
-			case 'scale_1':
-			case 'scale_2':
-				filteredProperties.properties[name].operation =
-					Math.exp; // log -> linear
-				break;
-			default: break;
-		};
-	}
-	
-	const gaussianBuffer = device.createBuffer({
-		label: "Gaussian data buffer",
-		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-		size: count * filteredProperties.stride * Float32Array.BYTES_PER_ELEMENT,
-		mappedAtCreation: true
-	});
-
-	console.debug(`Begin uploading data`);
-	begin = performance.now();
-	
-	{
-		const writeBuffer = new Float32Array(gaussianBuffer.getMappedRange());
-		const isLittleEndian = header.format === 'binary_little_endian';
-		const propertyValues = Object.values(filteredProperties.properties)
-		for (let i = 0; i < count; i++) {
-			const vertexIndex = i * filteredProperties.stride;
-			const vertexReadOffset = i * header.stride;
-			for (const {readOffset, writeIndex, operation} of propertyValues) {
-				let value = dataView.getFloat32(vertexReadOffset + readOffset, isLittleEndian);
-				if (operation) value = operation(value);
-				writeBuffer[vertexIndex + writeIndex] = value;
-			}
-		}
-	}
-
-	gaussianBuffer.unmap();
-	end = performance.now();
-	console.debug(`uploading ${(gaussianBuffer.size / (Math.pow(1024, 3))).toFixed(2)}GiB took ${((end - begin) / 1000).toFixed(2)}s`);
-	
-	return {count, gaussianBuffer}
-};
+import { loadGaussianData } from './loadGaussians.js';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter();
@@ -112,12 +19,14 @@ const context = canvas.getContext("webgpu")!;
 const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 context.configure({
 	device: device,
-	format: canvasFormat
+	format: canvasFormat,
+	alphaMode: "premultiplied"
 });
 
 const shaderModule = device.createShaderModule({ code: shaderCode });
 const shaderData = makeShaderDataDefinitions(shaderCode);
 const cameraUniforms = makeStructuredView(shaderData.structs.Camera);
+const controlsUniforms = makeStructuredView(shaderData.structs.Controls);
 
 const cameraUniformBuffer = device.createBuffer({
 	label: "Camera uniforms buffer",
@@ -134,7 +43,7 @@ const cameraUniformsBindGroupLayout = device.createBindGroupLayout({
 	}]
 });
 
-const uniformsBindGroup = device.createBindGroup({
+const cameraUniformsBindGroup = device.createBindGroup({
 	label: "Camera uniforms bind group",
 	layout: cameraUniformsBindGroupLayout,
 	entries: [{
@@ -143,17 +52,41 @@ const uniformsBindGroup = device.createBindGroup({
 	}]
 });
 
+const controlsUniformBuffer = device.createBuffer({
+	label: "Controls uniforms buffer",
+	size: controlsUniforms.arrayBuffer.byteLength,
+	usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+});
+
+const controlsUniformsBindGrouplayout = device.createBindGroupLayout({
+	label: "Controls uniforms bind group layout",
+	entries: [{
+		binding: 0,
+		visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+		buffer: { type: "uniform" }
+	}]
+});
+
+const controlsUniformsBindGroup = device.createBindGroup({
+	label: "Controls uniforms bind group",
+	layout: controlsUniformsBindGrouplayout,
+	entries: [{
+		binding: 0,
+		resource: { buffer: controlsUniformBuffer }
+	}]
+});
+
 const GaussianBindGroupLayout = device.createBindGroupLayout({
 	label: "Gaussians bind group layout",
 	entries: [{
 		binding: 0,
-		visibility: GPUShaderStage.VERTEX,
+		visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX,
 		buffer: { type: "read-only-storage" }
 	}]
 });
 
-let {count: numGaussians, gaussianBuffer} = await fetch('/default.ply')
-	.then(async x => await loadGaussianData(await x.blob()))
+let {count: numGaussians, gaussianBuffer} = await fetch(debugGaussiansURL)
+	.then(async x => await loadGaussianData(await x.blob(), device))
 
 const GaussianBindGroupDescriptor: GPUBindGroupDescriptor = {
 	label: "Gaussians bind group",
@@ -168,56 +101,93 @@ let gaussianBindGroup = device.createBindGroup(GaussianBindGroupDescriptor);
 
 const renderPipelineDescriptor: GPURenderPipelineDescriptor = {
 	label: "Pipeline",
+	primitive: { topology: 'triangle-strip' },
 	layout: device.createPipelineLayout({
 		label: "Pipeline layout",
-		bindGroupLayouts: [cameraUniformsBindGroupLayout, GaussianBindGroupLayout]
+		bindGroupLayouts: [
+cameraUniformsBindGroupLayout, 
+			controlsUniformsBindGrouplayout,
+						GaussianBindGroupLayout
+		]
 	}),
-	primitive: { topology: 'triangle-strip' },
-	vertex: {
-		module: shaderModule,
-		entryPoint: "vs"
-	},
+	vertex: { module: shaderModule, entryPoint: "vs" },
 	fragment: {
 		module: shaderModule,
 		entryPoint: "fs",
 		targets: [{
 			format: canvasFormat,
-			// blend: {
-			// 	alpha: {
-			// 		srcFactor: 'one',
-			// 		dstFactor: 'one-minus-src-alpha'
-			// 	},
-			// 	color: {
-			// 		srcFactor: 'src-alpha',
-			// 		dstFactor: 'one-minus-src-alpha'
-			// 	}
-			// }
+			blend: {
+				alpha: {
+					srcFactor: "one",
+					dstFactor: "one-minus-src-alpha"
+				},
+				color: {
+					srcFactor: "src-alpha",
+					dstFactor: "one-minus-src-alpha"
+				}
+			}
 		}]
-	},
+},
 	depthStencil: {
 		depthWriteEnabled: true,
-		format: "depth24plus",
+		format: "depth16unorm",
 		depthCompare: "less",
 	}
 };
 
-const renderPipeline = device.createRenderPipeline(renderPipelineDescriptor);
+const renderPipeline = await device.createRenderPipelineAsync(renderPipelineDescriptor);
 
-var depthTexture = device.createTexture({
+const textureDescriptor = {
 	size: [canvas.width, canvas.height],
-	format: renderPipelineDescriptor.depthStencil!.format!,
 	usage: GPUTextureUsage.RENDER_ATTACHMENT
+};
+
+let depthTexture = device.createTexture({
+	format: renderPipelineDescriptor.depthStencil!.format!,
+	...textureDescriptor
 });
 
-const camera = new OrbitCamera(
+const renderPassDescriptor: GPURenderPassDescriptor = {
+	colorAttachments: [{
+		view: context.getCurrentTexture().createView(),
+		loadOp: "clear",
+		clearValue: { r: 0, g: 0, b: 0, a: 1 },
+		storeOp: "store",
+	}],
+	depthStencilAttachment: {
+		view: depthTexture.createView(),
+		depthClearValue: 1.0,
+		depthLoadOp: "clear",
+		depthStoreOp: "store"
+	}
+};
+
+const buildRenderBundle = () => {
+	const bundleEncoder = device.createRenderBundleEncoder({
+		colorFormats: [canvasFormat],
+		depthStencilFormat: renderPipelineDescriptor.depthStencil!.format
+	});
+	
+	bundleEncoder.setPipeline(renderPipeline);
+	bundleEncoder.setBindGroup(0, cameraUniformsBindGroup);
+	bundleEncoder.setBindGroup(1, controlsUniformsBindGroup);
+	bundleEncoder.setBindGroup(2, gaussianBindGroup);
+	
+	bundleEncoder.draw(4, numGaussians);
+	return bundleEncoder.finish();
+}
+
+let renderBundle = buildRenderBundle();
+
+const controller = new OrbitController(
 	vec3.fromValues(0, 0, -2),
 	vec3.fromValues(0, 0, 0),
 	canvas,
 );
 
-camera.onChange = () => {
-	camera.getViewMatrix(cameraUniforms.views.view);
-	cameraUniforms.set({ position: camera.position });
+controller.onChange = () => {
+	controller.getViewMatrix(cameraUniforms.views.view);
+	cameraUniforms.set({ position: controller.position });
 	const offset = cameraUniforms.views.position.byteOffset;
 	const size = cameraUniforms.views.projection.byteOffset - offset;
 
@@ -230,33 +200,24 @@ camera.onChange = () => {
 	);
 };
 
+let lastTime = performance.now();
 const frame = () => {
-	const encoder = device.createCommandEncoder();
-	const renderPass = encoder.beginRenderPass({
-		colorAttachments: [{
-			view: context.getCurrentTexture().createView(),
-			loadOp: "clear",
-			clearValue: { r: 0.2, g: 0.2, b: 0.2, a: 1 },
-			storeOp: "store",
-		}],
-		depthStencilAttachment: {
-			view: depthTexture.createView(),
-			depthClearValue: 1.0,
-			depthLoadOp: "clear",
-			depthStoreOp: "store"
-		}
-	});
+	const time = performance.now();
+	controller.update((time - lastTime) / 1000);
+	lastTime = time
 
-	renderPass.setPipeline(renderPipeline);
-	renderPass.setBindGroup(0, uniformsBindGroup);
-	renderPass.setBindGroup(1, gaussianBindGroup);
-	
-	renderPass.draw(4, numGaussians);
+	const encoder = device.createCommandEncoder();
+	renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
+	const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+
+	renderPass.executeBundles([renderBundle])
 	
 	renderPass.end();
 	device.queue.submit([encoder.finish()]);
 	requestAnimationFrame(frame);
 };
+
+requestAnimationFrame(frame);
 
 const onResize = () => {
 	canvas.width = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth;
@@ -291,38 +252,68 @@ const onResize = () => {
 		size 
 	);
 
-	depthTexture.destroy();
-	depthTexture = device.createTexture({
-		size: [canvas.width, canvas.height],
-		format: renderPipelineDescriptor.depthStencil!.format!,
-		usage: GPUTextureUsage.RENDER_ATTACHMENT
-	});
-};
+	textureDescriptor.size = [canvas.width, canvas.height];
 
-window.onresize = () => {
-	console.debug("Resizing");
-	onResize();
+	depthTexture.destroy();
+	depthTexture = device.createTexture({format: renderPipelineDescriptor.depthStencil!.format!, ...textureDescriptor});
+	renderPassDescriptor.depthStencilAttachment!.view = depthTexture.createView();
 };
 
 onResize();
-requestAnimationFrame(frame);
-
-let lastTime = performance.now() / 1000;
-setInterval(() => {
-	const time = performance.now() / 1000;
-	camera.update(time - lastTime);
-	lastTime = time
-}, 1000/ 60);
+window.onresize = onResize;
 
 const plyInput = document.getElementById("PLYinput") as HTMLInputElement;
-plyInput.addEventListener("change", async (_) => {
-	if (plyInput.files) {
+plyInput.onchange = async (_) => {
+	if (plyInput.files && plyInput.files.length) {
 		const fileType = plyInput.files[0].name.split('.').pop()!;
 		if (fileType === "ply") {
-			const {count, gaussianBuffer} = await loadGaussianData(plyInput.files[0]);
+			const {count, gaussianBuffer} = await loadGaussianData(plyInput.files[0], device);
 			numGaussians = count;
+
+			GaussianBindGroupDescriptor.entries[0].resource.buffer.destroy();
 			GaussianBindGroupDescriptor.entries[0].resource.buffer = gaussianBuffer;
 			gaussianBindGroup = device.createBindGroup(GaussianBindGroupDescriptor);
+
+			renderBundle = buildRenderBundle();
+
 		} else console.error(`Filetype ${fileType} is not supported`);
-	} else console.error("Error reading dropped files");
-});
+	}
+};
+
+//##############################//
+//								//
+//		UI-specific code		//
+//								//
+//##############################//
+
+const SHSlider = document.getElementById("SHslider") as HTMLInputElement;
+const SHDisplay = document.getElementById("SHDisplay") as HTMLOutputElement;
+const SHUpdate = () => {
+	SHDisplay.value = SHSlider.value;
+	const val = parseInt(SHSlider.value);
+	controlsUniforms.set({maxSH: val});
+	device.queue.writeBuffer(
+		controlsUniformBuffer,
+		controlsUniforms.views.maxSH.byteOffset,
+		controlsUniforms.views.maxSH
+	);
+}
+
+SHUpdate();
+SHSlider.oninput = SHUpdate;
+
+const scaleSlider = document.getElementById("scaleSlider") as HTMLInputElement;
+const scaleDisplay = document.getElementById("scaleDisplay") as HTMLOutputElement;
+const scaleUpdate = () => {
+	const val = parseFloat(scaleSlider.value)
+	scaleDisplay.value = val.toFixed(2);
+	controlsUniforms.set({scaleMod: val});
+	device.queue.writeBuffer(
+		controlsUniformBuffer,
+		controlsUniforms.views.scaleMod.byteOffset,
+		controlsUniforms.views.scaleMod
+	);
+}
+
+scaleUpdate();
+scaleSlider.oninput = scaleUpdate;

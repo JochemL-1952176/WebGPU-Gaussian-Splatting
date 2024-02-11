@@ -11,7 +11,7 @@ function cartesianToSpherical(xyz: Vec3) {
 	}
 }
 
-export class OrbitCamera {
+export class OrbitController {
 	#distance: number;
 	#rotationQuat: Quat;
 	#right: Vec3;
@@ -25,9 +25,9 @@ export class OrbitCamera {
 	#panningVelocity = vec2.fromValues(0, 0);
 	#zoomVelocity = 0;
 
-	static #zoomSensitivity = 0.025;
-	static #rotateSensitivity = 0.002;
-	static #panSensitivity = 0.0008;
+	static #zoomSensitivity = 3;
+	static #rotateSensitivity = 0.1;
+	static #panSensitivity = 0.05;
 
 	get position(): Vec3 {
 		return this.#position;
@@ -46,26 +46,26 @@ export class OrbitCamera {
 		const fromTarget = vec3.sub(this.#position, this.#target);
 		const { thetaPhi, r } = cartesianToSpherical(fromTarget);
 		this.#distance = r;
-		this.#rotationQuat = quat.fromEuler(thetaPhi[1] + (Math.PI / 2), (Math.PI / 2) + thetaPhi[0], 0, 'yxz');
+		this.#rotationQuat = quat.fromEuler(thetaPhi[1] + (Math.PI / 2), thetaPhi[0] + (Math.PI / 2), 0, 'xyz');
 		const R = mat4.fromQuat(this.#rotationQuat);
 
 		this.#right = vec3.transformMat4(vec3.fromValues(1, 0, 0), R);
 		this.#up = vec3.transformMat4(vec3.fromValues(0, -1, 0), R);
 
 		domElement.oncontextmenu = (e) => e.preventDefault();
-		domElement.onwheel = (e) => { this.#zoomVelocity -= OrbitCamera.#zoomSensitivity * Math.sign(e.deltaY); } ;
+		domElement.onwheel = (e) => { this.#zoomVelocity -= OrbitController.#zoomSensitivity * Math.sign(e.deltaY); };
 		domElement.onmousemove = (e) => {
 			switch (e.buttons) {
 				case 1: // Left mouse button
 					vec2.scale(
 						vec2.fromValues(e.movementX, e.movementY),
-						OrbitCamera.#panSensitivity,
+						OrbitController.#panSensitivity,
 						this.#panningVelocity);
 					break;
 				case 2: // Right mouse button
 					vec2.scale(
 						vec2.fromValues(e.movementX, e.movementY),
-						OrbitCamera.#rotateSensitivity,
+						OrbitController.#rotateSensitivity,
 						this.#rotationVelocity);
 					break;
 			}
@@ -74,9 +74,9 @@ export class OrbitCamera {
 
 	getViewMatrix(target?: Mat4) { return mat4.lookAt(this.#position, this.#target, this.#up, target); }
 	update(deltaTime: number) {
-		this.#rotate(this.#rotationVelocity);
-		this.#pan(this.#panningVelocity);
-		this.#zoom(this.#zoomVelocity);
+		this.#rotate(vec2.scale(this.#rotationVelocity, deltaTime));
+		this.#pan(vec2.scale(this.#panningVelocity, deltaTime));
+		this.#zoom(this.#zoomVelocity * deltaTime);
 
 		const cmpEpsilon = (v: number) => Math.abs(v) > 0.0001;
 		if (this.#rotationVelocity.some(cmpEpsilon) ||
@@ -109,7 +109,7 @@ export class OrbitCamera {
 	}
 
 	#rotate(delta: Vec2) {
-		const deltaRotation = quat.fromEuler(delta[1], delta[0], 0, 'yxz');
+		const deltaRotation = quat.fromEuler(delta[1], delta[0], 0, 'xyz');
 		quat.multiply(this.#rotationQuat, deltaRotation, this.#rotationQuat);
 	}
 

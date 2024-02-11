@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<title>WebGPU test</title>
+	<title>WebGPU Gaussian Splatting</title>
 	<meta charset="UTF-8">
 	<!-- No favicon, prevents 404's in console -->
 	<link rel="icon" href="data:;base64,=">
@@ -9,12 +9,45 @@
 </head>
 <script type="module" src="src/main.ts"></script>
 <body>
-	<div id="UI">
-		<label for="PLYinput">Load gaussian data</label>
-		<input type="file" id="PLYinput" accept=".ply"/>
+	<div id="UI" class="flex-column">
+
+		<div id="inputs">
+
+			<label for="PLYinput" class="button">Load gaussian data</label>
+			<input type="file" id="PLYinput" accept=".ply"/>
+			
+			<label for="Camerainput" class="button">Load camera data</label>
+			<input type="file" id="Camerainput" accept=".json"/>
 		
-		<label for="Camerainput">Load camera data</label>
-		<input type="file" id="Camerainput" accept=".json"/>
+		</div>
+
+		<div id="controls" class="flex-column">
+
+			<div class="option">
+				<label for="SHslider">Maximum spherical harmonics degree</label>
+				<div class="flex-row">
+					<input type="range" id="SHslider" min="1" max="4" value="4">
+					<output id="SHDisplay">4</output>
+				</div>
+			</div>
+			
+			<div class="option">
+				<label for="scaleSlider">Gaussian scale modifier</label>
+				<div class="flex-row">
+					<datalist id="sliderDetents">
+						<option value=".25">
+						<option value=".5">
+						<option value="1">
+						<option value="2">
+					</datalist>
+
+					<input type="range" id="scaleSlider" min="0" max="3" value="1" step="0.01" list="sliderDetents">
+					<output id="scaleDisplay">1.00</output>
+				</div>
+			</div>
+
+		</div>
+
 	</div>
 	<canvas />
 </body>
