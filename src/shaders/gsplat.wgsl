@@ -1,3 +1,43 @@
+struct Camera {
+	position: vec3f,
+	view: mat4x4f,
+	projection: mat4x4f,
+	focal: vec2f,
+	tan_fov: vec2f
+};
+
+struct Controls {
+	maxSH: u32,
+	scaleMod: f32
+};
+
+@group(0) @binding(0) var<uniform> cam: Camera;
+@group(0) @binding(1) var<uniform> controls: Controls;
+
+// Use flat array to bypass struct padding
+@group(0) @binding(2) var<storage, read> gaussianData: array<f32>;
+
+fn readVec3(offset: u32) -> vec3f {
+	return vec3f(
+		gaussianData[offset],
+		gaussianData[offset + 1],
+		gaussianData[offset + 2]);
+}
+
+fn readVec4(offset: u32) -> vec4f {
+	return vec4f(
+		gaussianData[offset],
+		gaussianData[offset + 1],
+		gaussianData[offset + 2],
+		gaussianData[offset + 3]);
+}
+
+fn isInFrustum(clip_space_pos: vec3f) -> bool {
+    return 	abs(clip_space_pos.x) < 1.3 &&
+			abs(clip_space_pos.y) < 1.3 &&
+			abs(clip_space_pos.z - 0.5) < 0.5;
+}
+
 // Adapted from
 // https://github.com/graphdeco-inria/diff-gaussian-rasterization/blob/main/cuda_rasterizer
 const PI = radians(180);
@@ -27,47 +67,6 @@ const shOffset = 3;
 const opacityOffset = 51;
 const scaleOffset = 52;
 const rotationOffset = 55;
-
-struct Camera {
-	position: vec3f,
-	view: mat4x4f,
-	projection: mat4x4f,
-	focal: vec2f,
-	tan_fov: vec2f
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
-
-struct Controls {
-	maxSH: u32,
-	scaleMod: f32
-};
-
-@group(1) @binding(0) var<uniform> controls: Controls;
-
-// Use flat array to bypass struct padding
-@group(2) @binding(0) var<storage, read> gaussianData: array<f32>;
-
-fn readVec3(offset: u32) -> vec3f {
-	return vec3f(
-		gaussianData[offset],
-		gaussianData[offset + 1],
-		gaussianData[offset + 2]);
-}
-
-fn readVec4(offset: u32) -> vec4f {
-	return vec4f(
-		gaussianData[offset],
-		gaussianData[offset + 1],
-		gaussianData[offset + 2],
-		gaussianData[offset + 3]);
-}
-
-fn isInFrustum(clip_space_pos: vec3f) -> bool {
-    return 	abs(clip_space_pos.x) < 1.3 &&
-			abs(clip_space_pos.y) < 1.3 &&
-			abs(clip_space_pos.z - 0.5) < 0.5;
-}
 
 fn computeColorFromSH(pos: vec3f, baseIndex: u32) -> vec3f {
 	let shIndex = baseIndex + shOffset;
@@ -156,7 +155,6 @@ struct VertexOut {
 	@builtin(position) pos: vec4f,
 	@location(0) color: vec3f,
 	@location(1) uv: vec2f,
-	@location(2) radius: f32,
 	@location(3) conic: vec3f,
 	@location(4) opacity: f32,
 };
@@ -200,20 +198,19 @@ const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 	let quadOffset = quad[in.vertexIndex];
 	
 	out.pos = vec4f(projPos.xy + 2 * radius_ndc * quadOffset, projPos.zw);
-	out.uv = (quadOffset + 1) / 2;
-	out.radius = radius_pix;
+	out.uv = radius_pix * quadOffset;
 	out.color = computeColorFromSH(pos, baseIndex);
 
 	return out;
 }
 
 @fragment fn fs(in: VertexOut) -> @location(0) vec4f {
-	let d = in.radius * ((in.uv * 2) - 1);
+	let d = -in.uv;
 	let power = -0.5 * (in.conic.x * d.x * d.x + in.conic.z * d.y * d.y) - in.conic.y * d.x * d.y;
 	if (power > 0) { discard; }
 
 	let alpha = min(1, in.opacity * exp(power));	
-	if (alpha < 0.25) { discard; }
+	if (alpha < 0.5) { discard; }
 
 	return vec4f(in.color, 1);
 }

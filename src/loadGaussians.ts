@@ -1,6 +1,7 @@
 import readPLY from "./readPLY";
+import { GPUSplats } from "./scene";
 
-export async function loadGaussianData(ply: Blob, device: GPUDevice) {
+export async function loadGaussianData(ply: Blob, device: GPUDevice): Promise<GPUSplats> {
 	console.debug(`Begin reading Gaussian data`);
 	let begin = performance.now();
 	
@@ -68,7 +69,7 @@ export async function loadGaussianData(ply: Blob, device: GPUDevice) {
 	
 	const gaussianBuffer = device.createBuffer({
 		label: "Gaussian data buffer",
-		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+		usage: GPUBufferUsage.STORAGE,
 		size: count * filteredProperties.stride * Float32Array.BYTES_PER_ELEMENT,
 		mappedAtCreation: true
 	});
@@ -95,5 +96,5 @@ export async function loadGaussianData(ply: Blob, device: GPUDevice) {
 	end = performance.now();
 	console.debug(`uploading ${(gaussianBuffer.size / (Math.pow(1024, 2))).toFixed(2)}MiB took ${((end - begin) / 1000).toFixed(2)}s`);
 	
-	return {count, gaussianBuffer}
+	return {count, buffer: gaussianBuffer}
 };

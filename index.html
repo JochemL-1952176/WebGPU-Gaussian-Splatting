@@ -12,22 +12,19 @@
 	<div id="UI" class="flex-column">
 
 		<div id="inputs">
-
 			<label for="PLYinput" class="button">Load gaussian data</label>
 			<input type="file" id="PLYinput" accept=".ply"/>
 			
 			<label for="Camerainput" class="button">Load camera data</label>
 			<input type="file" id="Camerainput" accept=".json"/>
-		
 		</div>
 
 		<div id="controls" class="flex-column">
-
 			<div class="option">
 				<label for="SHslider">Maximum spherical harmonics degree</label>
 				<div class="flex-row">
-					<input type="range" id="SHslider" min="1" max="4" value="4">
-					<output id="SHDisplay">4</output>
+					<input type="range" id="SHslider" min="0" max="3" value="3">
+					<output id="SHDisplay">3</output>
 				</div>
 			</div>
 			
@@ -45,7 +42,24 @@
 					<output id="scaleDisplay">1.00</output>
 				</div>
 			</div>
+		</div>
 
+		<div id="perf" class="flex-column">
+				<p id="frameTime" class="option"></p>
+				<p id="FPS" class="option"></p>
+				<p id="jstime" class="option"></p>
+				<p id="gputime" class="option"></p>
+		</div>
+
+		<div id="cameras" class="flex-row">
+			<div class="flex-column">
+				<div class="flex-row">
+					<label for="cameraID">Camera ID: </label>
+					<input type="number" id="cameraID">
+				</div>
+				<div class="flex-row"><p>Image name: </p><p id="imageName"></p></p></div>
+				
+			</div>
 		</div>
 
 	</div>
