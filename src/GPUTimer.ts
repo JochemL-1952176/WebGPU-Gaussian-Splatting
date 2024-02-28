@@ -27,19 +27,17 @@ export default class GPUTimer {
 		});
 	}
 
-	#beginTimestampPass(encoder: GPUCommandEncoder, fnName: string, descriptor: PassDescriptor, eventIndex: number) {
+	#beginTimestampPass(encoder: GPUCommandEncoder, fnName: string, descriptor: PassDescriptor, eventIndex: number): PassEncoder {
 		if (!this.#canTimestamp) return encoder[fnName](descriptor);
 		console.assert(eventIndex < this.#numEvents, `event ${eventIndex} does not exist`);
 
 		const pass: PassEncoder = encoder[fnName]({
 			...descriptor,
-			...{
-				timestampWrites: {
-					querySet: this.#querySet,
-					beginningOfPassWriteIndex: 2 * eventIndex,
-					endOfPassWriteIndex: 2 * eventIndex + 1,
-				},
-			},
+			timestampWrites: {
+				querySet: this.#querySet,
+				beginningOfPassWriteIndex: 2 * eventIndex,
+				endOfPassWriteIndex: 2 * eventIndex + 1,
+			}
 		});
 
 		const resolve = () => this.#resolveTiming(encoder);

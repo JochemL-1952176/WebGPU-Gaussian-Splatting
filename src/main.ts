@@ -1,10 +1,12 @@
 import { utils, vec2 } from 'wgpu-matrix';
-import TrackballController, { PerspectiveCamera } from './cameraControls';
+import TrackballControls, { PerspectiveCamera } from './cameraControls';
 import debugGaussiansURL from './assets/default.ply?url';
 import { loadGaussianData } from './loadGaussians';
-import loadCameras, { Camera } from './loadCameras';
+import loadCameras from './loadCameras';
 import Renderer from './renderer';
 import Scene from './scene';
+import { Pane } from 'tweakpane';
+import GPUTimer from './GPUTimer';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -12,16 +14,15 @@ if (!adapter) { throw new Error("No GPUAdapter found"); }
 
 const timestampEnabled = adapter.features.has('timestamp-query');
 if (!timestampEnabled)
-	console.warn("Feature 'timestamp-query' is not enabled, GPU timings will not be available");
+console.warn("Feature 'timestamp-query' is not enabled, GPU timings will not be available");
 
 const device = await adapter.requestDevice({
 	requiredLimits: {
+		maxComputeInvocationsPerWorkgroup: 1024,
 		maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
 		maxBufferSize: 2 * Math.pow(1024, 3) // 2 GiB
 	},
-	requiredFeatures: [
-		...(timestampEnabled ? ['timestamp-query' as GPUFeatureName] : [])
-	]
+	requiredFeatures: timestampEnabled ? ['timestamp-query' as GPUFeatureName] : []
 });
 
 const canvas = document.querySelector("canvas")!;
@@ -33,98 +34,54 @@ context.configure({
 	alphaMode: "premultiplied"
 });
 
-const renderer = new Renderer(device, context, canvasFormat);
+const timer = new GPUTimer(device, 1);
 
-let splats = await fetch(debugGaussiansURL)
-	.then(async x => await loadGaussianData(await x.blob(), device));
+const renderer = new Renderer(device, context);
+let scene = await fetch(debugGaussiansURL)
+	.then(async response => await response.blob())
+	.then(async blob => await loadGaussianData(blob, device))
+	.then(async splats => new Scene(device, renderer, splats));
 
-const scene = new Scene(device, renderer, splats);
-const camera = new PerspectiveCamera(utils.degToRad(60), canvas.width / canvas.height, 0.01, 1000);
-const controller = new TrackballController(canvas);
+const camera = new PerspectiveCamera(utils.degToRad(60), canvas.width / canvas.height, 0.01, 1000, renderer.cameraUniforms);
+const controls = new TrackballControls(camera, canvas);
 
-function updateControllerUniforms() {
-	controller.getViewMatrix(renderer.cameraUniforms.views.view);
-	renderer.cameraUniforms.set({ position: controller.position });
-	const offset = renderer.cameraUniforms.views.position.byteOffset;
-	const size = renderer.cameraUniforms.views.projection.byteOffset - offset;
-
-	device.queue.writeBuffer(
-		renderer.cameraUniformsBuffer,
-		offset,
-		renderer.cameraUniforms.arrayBuffer,
-		offset,
-		size 
-	);
-}
-
-class Accumulator {
-	#sum: number = 0;
-	#nSamples: number = 0;
-
-	constructor() {};
-	getAverage() { return this.#sum / this.#nSamples;}
-	add(v: number) { this.#sum += v; this.#nSamples++; }
-	reset() { this.#sum = 0; this.#nSamples = 0; }
-}
-
-const frametimeAcc = new Accumulator();
-const gputimeAcc = new Accumulator();
-const jstimeAcc = new Accumulator();
+const telemetry = {
+	fps: 0,
+	frameTime: 0,
+	jsTime: 0,
+	// sortTime: 0,
+	renderTime: 0,
+};
 
 let accTime = 0;
 const updateSlice = 1 / 100; // 100 updates per second
-
-let lastTimingUpdate = performance.now();
-const TimingUpdateInterval = 100; //ms
 let lastTime = performance.now();
 
-function frame() {
-	const frameStart = performance.now();
-	const deltaTime = (frameStart - lastTime) / 1000;
+function frame(frameStart: number) {
+	requestAnimationFrame(frame);
+
+	const deltaTime = frameStart - lastTime;
 	lastTime = frameStart;
 	
 	// UPDATE
 	// Decouple camera control from framerate
-	accTime += deltaTime;
+	accTime += deltaTime / 1000;
 	while (accTime > updateSlice) {
-		controller.update();
+		controls.update();
 		accTime -= updateSlice;
 	}
 
-	if (controller.hasChanged) {
-		updateControllerUniforms();
-		controller.hasChanged = false;
-	}
-
 	// DRAW
-	renderer.renderFrame(device, scene);
+	renderer.renderFrame(device, scene, camera, timer);
 
 	// TELEMETRY
-	const deltaFPSUpdate = (frameStart - lastTimingUpdate);
-	const updateTelemetry = deltaFPSUpdate > TimingUpdateInterval;
-	if (updateTelemetry) {
-		const frametime = frametimeAcc.getAverage();
-		const fps = 1 / frametime;
-		const jstime = jstimeAcc.getAverage();
-		const gputime = gputimeAcc.getAverage();
-		
-		frametimeLabel.textContent = `frametime: ${(frametime * 1000).toFixed(1).padStart(4)}ms`;
-		fpsLabel.textContent = `${Math.round(fps).toString().padStart(3)} FPS`;
-		jstimelabel.textContent = `javascript time: ${jstime.toFixed(1)}ms`
-		gputimeLabel.textContent = `render pass time: ${gputime.toFixed(1)}μs`;
-
-		lastTimingUpdate = frameStart;
-
-		frametimeAcc.reset();
-		jstimeAcc.reset();
-		gputimeAcc.reset();
-	}
-
-	renderer.gpuTimer.getResults([(v: number) => gputimeAcc.add(v)]);
-	frametimeAcc.add(deltaTime);
-	jstimeAcc.add(performance.now() - frameStart);
-
-	requestAnimationFrame(frame);
+	telemetry.fps = 1000 / deltaTime;
+	telemetry.frameTime = deltaTime;
+	telemetry.jsTime = performance.now() - frameStart;
+	timer.getResults([
+		// (v: number) => telemetry.sortTime = v,
+		(v: number) => telemetry.renderTime = v
+	]);
 };
 
 requestAnimationFrame(frame);
@@ -142,19 +99,8 @@ function onResize() {
 	const tan_fov = vec2.fromValues((htany / canvas.height) * canvas.width, htany);
 	const focal = vec2.fromValues(canvas.width / (2 * tan_fov[0]), canvas.height / (2 * tan_fov[1]));
 	
-	renderer.cameraUniforms.set({tan_fov, focal});
-	camera.getprojectionMatrix(renderer.cameraUniforms.views.projection);
-
-	const offset = renderer.cameraUniforms.views.projection.byteOffset;
-	const size = renderer.cameraUniforms.arrayBuffer.byteLength - offset;
-
-	device.queue.writeBuffer(
-		renderer.cameraUniformsBuffer,
-		offset,
-		renderer.cameraUniforms.arrayBuffer,
-		offset,
-		size 
-	);
+	camera.set({tan_fov, focal});
+	camera.recalculateProjectionMatrix();
 };
 
 onResize();
@@ -166,17 +112,77 @@ window.onresize = onResize;
 //								//
 //##############################//
 
-const frametimeLabel = document.getElementById("frameTime") as HTMLParagraphElement;
-const fpsLabel = document.getElementById("FPS") as HTMLParagraphElement;
-const jstimelabel = document.getElementById("jstime") as HTMLParagraphElement;
-const gputimeLabel = document.getElementById("gputime") as HTMLParagraphElement;
+const pane = new Pane({
+	title: "Settings",
+	container: document.getElementById("tpContainer")!
+});
 
-const SHSlider = document.getElementById("SHslider") as HTMLInputElement;
-const SHDisplay = document.getElementById("SHDisplay") as HTMLOutputElement;
+const plyInput = document.getElementById("plyInput") as HTMLInputElement;
+const plyButton = pane.addButton({ title: "Load gaussian data" });
+plyButton.on('click', () => plyInput.click());
+
+plyInput.onchange = async (_) => {
+	if (plyInput.files && plyInput.files.length) {
+		const fileType = plyInput.files[0].name.split('.').pop()!;
+		if (fileType === "ply") {
+			const splats = await loadGaussianData(plyInput.files[0], device);
+			scene.destroy();
+			scene = new Scene(device, renderer, splats);
+			cameraFolder.hidden = true;
+
+		} else console.error(`Filetype ${fileType} is not supported`);
+	}
+	plyInput.value = ""
+};
+
+const cameraInput = document.getElementById("cameraInput") as HTMLInputElement;
+const cameraButton = pane.addButton({ title: "Load camera data" });
+cameraButton.on('click', () => cameraInput.click());
+
+const cameraUI = {
+	idx: 0,
+	name: ""
+};
+
+function setActiveCamera(idx: number) {
+	if (!scene.cameras) {
+		console.error("No cameras loaded");
+		return;
+	}
+
+	if (idx < 0 || idx >= scene.cameras.length) return;
+
+	cameraUI.idx = idx;
+	cameraUI.name = scene.cameras[idx].img_name;
+
+	cameraSelector.refresh();
+	controls.setPose(scene.cameras[idx].position, scene.cameras[idx].rotation);
+}
+
+cameraInput.onchange = async (_) => {
+	if (cameraInput.files && cameraInput.files.length) {
+		const fileType = cameraInput.files[0].name.split('.').pop()!;
+		if (fileType === "json") {
+			scene.cameras = await loadCameras(cameraInput.files[0]);
+
+			cameraFolder.hidden = false;
+			(cameraSelector as any).min = 0;
+			(cameraSelector as any).max = scene.cameras.length - 1;
+
+			setActiveCamera(0);
+		} else console.error(`Filetype ${fileType} is not supported`);
+	}
+	cameraInput.value = "";
+};
+
+const controlsFolder = pane.addFolder({ title: "controls" });
+
+const SHSlider = controlsFolder.addBinding(renderer.controlsUniforms.views.maxSH, '0', {
+	label: 'Spherical harmonics degree',
+	min: 0, max: 3, step: 1, value: 3
+});
+
 function SHUpdate() {
-	SHDisplay.value = SHSlider.value;
-	const val = parseInt(SHSlider.value);
-	renderer.controlsUniforms.set({maxSH: val});
 	device.queue.writeBuffer(
 		renderer.controlsUniformsBuffer,
 		renderer.controlsUniforms.views.maxSH.byteOffset,
@@ -184,15 +190,15 @@ function SHUpdate() {
 	);
 }
 
+SHSlider.on('change', SHUpdate);
 SHUpdate();
-SHSlider.oninput = SHUpdate;
 
-const scaleSlider = document.getElementById("scaleSlider") as HTMLInputElement;
-const scaleDisplay = document.getElementById("scaleDisplay") as HTMLOutputElement;
+const scaleSlider = controlsFolder.addBinding(renderer.controlsUniforms.views.scaleMod, '0', {
+	label: 'Gaussian scale modifier',
+	min: 0, max: 3, step: 0.01, value: 1
+});
+
 function scaleUpdate() {
-	const val = parseFloat(scaleSlider.value)
-	scaleDisplay.value = val.toFixed(2);
-	renderer.controlsUniforms.set({scaleMod: val});
 	device.queue.writeBuffer(
 		renderer.controlsUniformsBuffer,
 		renderer.controlsUniforms.views.scaleMod.byteOffset,
@@ -200,54 +206,60 @@ function scaleUpdate() {
 	);
 }
 
+scaleSlider.on('change', scaleUpdate);
 scaleUpdate();
-scaleSlider.oninput = scaleUpdate;
 
-const plyInput = document.getElementById("PLYinput") as HTMLInputElement;
-plyInput.onchange = async (_) => {
-	if (plyInput.files && plyInput.files.length) {
-		const fileType = plyInput.files[0].name.split('.').pop()!;
-		if (fileType === "ply") {
-			const splats = await loadGaussianData(plyInput.files[0], device);
-			scene.setSplats(device, splats);
-		} else console.error(`Filetype ${fileType} is not supported`);
-	}
-};
+const telemetryFolder = pane.addFolder({ title: "Telemetry" });
 
-let cameras: Array<Camera> | undefined;
-let cameraIdx = 0;
+telemetryFolder.addBinding(telemetry, 'fps', {
+	readonly: true,
+	label: 'FPS',
+	format: (v: number) => `${Math.round(v)} FPS`,
+});
 
-const camerasDiv = document.getElementById("cameras") as HTMLDivElement;
-const cameraSelector = document.getElementById("cameraID") as HTMLInputElement;
-const imgNamelabel = document.getElementById("imageName") as HTMLParagraphElement;
+telemetryFolder.addBinding(telemetry, 'frameTime', {
+	readonly: true,
+	view: 'graph',
+	label: 'Frametime',
+	format: (v: number) => `${v.toFixed(2)}ms`,
+	min: 0, max: 100/3
+});
 
-function setActiveCamera(idx: number) {
-	if (!cameras) {
-		console.error("No cameras loaded");
-		return;
-	}
+telemetryFolder.addBinding(telemetry, 'jsTime', {
+	readonly: true,
+	view: 'graph',
+	label: 'Javascript time',
+	format: (v: number) => `${v.toFixed(2)}ms`,
+	min: 0, max: 100/3
+});
 
-	if (idx < 0 || idx >= cameras.length) return;
+// telemetryFolder.addBinding(telemetry, 'sortTime', {
+// 	readonly: true,
+// 	view: 'graph',
+// 	label: 'Sort time',
+// 	format: (v: number) => `${v.toFixed(2)}μs`,
+// 	min: 0, max: 100000/3
+// });
 
-	cameraIdx = idx;
-	controller.setPose(cameras[cameraIdx].position, cameras[cameraIdx].rotation);
-	imgNamelabel.textContent = cameras[cameraIdx].img_name;
-}
+telemetryFolder.addBinding(telemetry, 'renderTime', {
+	readonly: true,
+	view: 'graph',
+	label: 'Render time',
+	format: (v: number) => `${v.toFixed(2)}μs`,
+	min: 0, max: 100000/3
+});
 
-cameraSelector.oninput = () => { setActiveCamera(parseInt(cameraSelector.value)); };
+const cameraFolder = pane.addFolder({ title: "Camera", hidden: true });
 
-const camerasInput = document.getElementById("Camerainput") as HTMLInputElement;
-camerasInput.onchange = async (_) => {
-	if (camerasInput.files && camerasInput.files.length) {
-		const fileType = camerasInput.files[0].name.split('.').pop()!;
-		if (fileType === "json") {
-			cameras = await loadCameras(camerasInput.files[0]);
-			setActiveCamera(0);
+const cameraSelector = cameraFolder.addBinding(cameraUI, 'idx', {
+	label: "Camera ID",
+	min: 0, max: 1, step: 1
+});
+cameraSelector.on('change', (e) => setActiveCamera(e.value));
+(cameraSelector.element.querySelector(".tp-sldv") as HTMLDivElement)
+	.onwheel = (e) => setActiveCamera(cameraUI.idx - Math.sign(e.deltaY));
 
-			camerasDiv.style.opacity = "1";
-			cameraSelector.min = "0";
-			cameraSelector.max = (cameras.length -1).toString();
-			cameraSelector.value = cameraSelector.min;
-		} else console.error(`Filetype ${fileType} is not supported`);
-	}
-};
+cameraFolder.addBinding(cameraUI, 'name', {
+	label: "Image name",
+	readonly: true
+});

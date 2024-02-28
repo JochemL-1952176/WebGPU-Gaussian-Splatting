@@ -1,5 +1,9 @@
 import readPLY from "./readPLY";
-import { GPUSplats } from "./scene";
+
+export type GPUSplats = {
+	count: number,
+	buffer: GPUBuffer
+};
 
 export async function loadGaussianData(ply: Blob, device: GPUDevice): Promise<GPUSplats> {
 	console.debug(`Begin reading Gaussian data`);

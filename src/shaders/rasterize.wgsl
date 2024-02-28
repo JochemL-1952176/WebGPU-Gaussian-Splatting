@@ -1,42 +1,10 @@
-struct Camera {
-	position: vec3f,
-	view: mat4x4f,
-	projection: mat4x4f,
-	focal: vec2f,
-	tan_fov: vec2f
-};
-
-struct Controls {
+struct RenderControls {
 	maxSH: u32,
 	scaleMod: f32
 };
 
-@group(0) @binding(0) var<uniform> cam: Camera;
-@group(0) @binding(1) var<uniform> controls: Controls;
-
-// Use flat array to bypass struct padding
-@group(0) @binding(2) var<storage, read> gaussianData: array<f32>;
-
-fn readVec3(offset: u32) -> vec3f {
-	return vec3f(
-		gaussianData[offset],
-		gaussianData[offset + 1],
-		gaussianData[offset + 2]);
-}
-
-fn readVec4(offset: u32) -> vec4f {
-	return vec4f(
-		gaussianData[offset],
-		gaussianData[offset + 1],
-		gaussianData[offset + 2],
-		gaussianData[offset + 3]);
-}
-
-fn isInFrustum(clip_space_pos: vec3f) -> bool {
-    return 	abs(clip_space_pos.x) < 1.3 &&
-			abs(clip_space_pos.y) < 1.3 &&
-			abs(clip_space_pos.z - 0.5) < 0.5;
-}
+@group(0) @binding(2) var<uniform> controls: RenderControls;
+@group(1) @binding(0) var<storage, read> sorted_entries: array<Entry>;
 
 // Adapted from
 // https://github.com/graphdeco-inria/diff-gaussian-rasterization/blob/main/cuda_rasterizer
@@ -60,13 +28,6 @@ const Y3 = array(
 	 0.25 * sqrt(105 / PI),
 	-0.25 * sqrt(35 / (2 * PI))
 );
-
-const stride = 59;
-const posOffset = 0;
-const shOffset = 3;
-const opacityOffset = 51;
-const scaleOffset = 52;
-const rotationOffset = 55;
 
 fn computeColorFromSH(pos: vec3f, baseIndex: u32) -> vec3f {
 	let shIndex = baseIndex + shOffset;
@@ -162,16 +123,13 @@ struct VertexOut {
 const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 @vertex fn vs(in: VertexIn) -> VertexOut {
 	var out = VertexOut();
+	// let entry = sorted_entries[in.instanceIndex];
 
 	let baseIndex = in.instanceIndex * stride;
+	
 	let pos = readVec3(baseIndex + posOffset);
 	var projPos = cam.projection * cam.view * vec4f(pos, 1);
 	projPos /= projPos.w;
-
-	if (!isInFrustum(projPos.xyz)) {
-		out.pos = vec4f(0);
-		return out;
-	}
 
 	out.opacity = gaussianData[baseIndex + opacityOffset];
 	let scale = readVec3(baseIndex + scaleOffset);
@@ -191,7 +149,7 @@ const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 	let mid = 0.5 * (cov2d.x + cov2d.z);
 	let lambda1 = mid + sqrt(max(0.1, mid * mid - det));
 	let lambda2 = mid - sqrt(max(0.1, mid * mid - det));
-	let radius_pix = ceil(3 * sqrt(max(lambda1, lambda2)));
+	let radius_pix = ceil(4 * sqrt(max(lambda1, lambda2)));
 	let wh = 2 * cam.tan_fov * cam.focal;
 	let radius_ndc = vec2f(radius_pix) / wh;
 
@@ -209,8 +167,8 @@ const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 	let power = -0.5 * (in.conic.x * d.x * d.x + in.conic.z * d.y * d.y) - in.conic.y * d.x * d.y;
 	if (power > 0) { discard; }
 
-	let alpha = min(1, in.opacity * exp(power));	
-	if (alpha < 0.5) { discard; }
+	let alpha = min(1, in.opacity * exp(power));
+	if (alpha < 0.2) { discard; }
 
 	return vec4f(in.color, 1);
 }

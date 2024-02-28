@@ -1,77 +1,36 @@
+import { CameraData } from "./loadCameras";
+import { GPUSplats } from "./loadGaussians";
 import Renderer from "./renderer";
 
-export type GPUSplats = {
-	count: number,
-	buffer: GPUBuffer
-};
-
 export default class Scene {
-	#renderer: Renderer;
-	#splats?: GPUSplats;
+	splats: GPUSplats;
+	cameras?: Array<CameraData>;
 
-	renderBundle!: GPURenderBundle;
-	#renderBindGroup!: GPUBindGroup;
-
-	#cameraUniformsBindgroupEntry: GPUBindGroupEntry;
-	#controlsUniformsBindgroupEntry: GPUBindGroupEntry;
-	#gaussiansBindgroupEntry: GPUBindGroupEntry;
-	#renderBindGroupDescriptor: GPUBindGroupDescriptor;
+	renderBindGroup: GPUBindGroup;
 
 	constructor(device: GPUDevice, renderer: Renderer, splats: GPUSplats) {
-		this.#renderer = renderer;
+		this.splats = splats;
 
-		this.#cameraUniformsBindgroupEntry = {
-			binding: renderer.cameraUniformsLayoutEntry.binding,
-			resource: { buffer: renderer.cameraUniformsBuffer }
-		};
-
-		this.#controlsUniformsBindgroupEntry = {
-			binding: renderer.controlsUniformsLayoutEntry.binding,
-			resource: { buffer: renderer.controlsUniformsBuffer }
-		};
-
-		this.#gaussiansBindgroupEntry = {
-			binding: renderer.gaussiansLayoutEntry.binding,
-			resource: { buffer: splats.buffer }
-		};
-
-		this.#renderBindGroupDescriptor = {
+		this.renderBindGroup = device.createBindGroup({
 			label: "render bindgroup",
-			layout: renderer.renderBindGroupLayout,
-			entries: [
-				this.#cameraUniformsBindgroupEntry,
-				this.#controlsUniformsBindgroupEntry,
-				this.#gaussiansBindgroupEntry
+			layout: renderer.primaryRenderBindGroupLayout,
+			entries: [{
+					binding: renderer.cameraUniformsLayoutEntry.binding,
+					resource: { buffer: renderer.cameraUniformsBuffer }
+				}, {
+					binding: renderer.gaussiansLayoutEntry.binding,
+					resource: { buffer: splats.buffer }
+				}, {
+					binding: renderer.controlsUniformsLayoutEntry.binding,
+					resource: { buffer: renderer.controlsUniformsBuffer }
+				}
 			]
-		};
-
-		this.setSplats(device, splats);
-	}
-
-	#buildRenderBundle(device: GPUDevice) {
-		const bundleEncoder = device.createRenderBundleEncoder({
-			colorFormats: [this.#renderer.canvasFormat],
-			depthStencilFormat: this.#renderer.renderPipelineDescriptor.depthStencil!.format
 		});
-		
-		bundleEncoder.setPipeline(this.#renderer.renderPipeline);
-		bundleEncoder.setBindGroup(0, this.#renderBindGroup);
-		
-		bundleEncoder.draw(4, this.#splats!.count);
-		return bundleEncoder.finish();
+
+		renderer.finalize(device, this);
 	}
 
-	setSplats(device: GPUDevice, splats: GPUSplats) {
-		this.#splats?.buffer.destroy();
-		this.#splats = splats;
-
-		(this.#gaussiansBindgroupEntry.resource as GPUBufferBinding).buffer = splats.buffer;
-		this.#renderBindGroupDescriptor.entries = [
-			this.#cameraUniformsBindgroupEntry,
-			this.#controlsUniformsBindgroupEntry,
-			this.#gaussiansBindgroupEntry
-		];
-		this.#renderBindGroup = device.createBindGroup(this.#renderBindGroupDescriptor);
-		this.renderBundle = this.#buildRenderBundle(device);
+	destroy() {
+		this.splats.buffer.destroy();
 	}
 }

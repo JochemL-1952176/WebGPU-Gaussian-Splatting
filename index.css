@@ -1,4 +1,8 @@
-* { margin: 0; }
+* {
+	margin: 0;
+	font-family: Arial, Helvetica, sans-serif;
+	font-size: 14px;
+}
 
 body, html {
 	padding: 0;
@@ -6,68 +10,8 @@ body, html {
 	background-color: black;
 }
 
-.flex-column {
-	display: flex;
-	flex-flow: column nowrap;
-}
-
-.flex-row {
-	display: flex;
-	flex-flow: row nowrap;
-}
-
-#UI {
+#tpContainer {
 	position: absolute;
-	top: 18px;
 	left: 8px;
-}
-
-input[type=file] { display: none; }
-
-.button {
-	user-select: none;
-}
-
-.button, #controls, #perf, #cameras {
-	border-radius: 4px;
-	margin-top: 16px;
-	background-color: #ffffff;
-}
-
-.button {
-	padding: 8px 10px;
-}
-
-label, output, p {
-	font-family: Arial, Helvetica, sans-serif;
-}
-
-.button, input {
-	cursor: pointer;
-}
-
-.button:hover {
-	background-color: #eaeaea;
-}
-
-.option {
-	margin: 4px 8px;
-}
-
-.option > .flex-row > input {
-	flex-grow: 1;
-}
-
-.option > .flex-row > output {
-	margin: 0 6px;
-}
-
-#cameras {
-	opacity: 0;
-	justify-content: space-between;
-	padding: 6px;
-}
-
-#cameras .flex-column {
-	justify-content: space-around;
+	top: 8px;
 }

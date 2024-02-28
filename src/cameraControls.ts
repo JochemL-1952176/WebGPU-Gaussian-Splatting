@@ -1,11 +1,15 @@
-import { Mat3, Mat4, mat4, quat, vec2, vec3, Vec3 } from "wgpu-matrix";
+import { StructuredView } from "webgpu-utils";
+import { Mat3, mat4, quat, vec2, vec3, Vec3 } from "wgpu-matrix";
 
 const UP = vec3.fromValues(0, -1, 0);
 const FORWARD = vec3.fromValues(0, 0, 1);
 
 
-interface Camera {
-	getprojectionMatrix(dst?: Mat4): Mat4;
+export interface Camera {
+	uniforms: StructuredView;
+	hasChanged: boolean;
+	set(data: any): void;
+	recalculateProjectionMatrix(): void;
 }
 
 export class PerspectiveCamera implements Camera {
@@ -14,20 +18,25 @@ export class PerspectiveCamera implements Camera {
 	near: number;
 	far: number;
 
-	constructor(fov: number, aspect: number, near: number, far: number) {
+	uniforms: StructuredView;
+	hasChanged = true;
+
+	constructor(fov: number, aspect: number, near: number, far: number, uniforms: StructuredView) {
 		this.fov = fov;
 		this.aspect = aspect;
 		this.near = near;
 		this.far = far;
+		this.uniforms = uniforms;
 	}
 
-	getprojectionMatrix(dst?: Mat4): Mat4 {
-		return mat4.perspective(
-			this.fov,
-			this.aspect,
-			this.near, this.far,
-			dst
-		); 
+	set(data: any) {
+		this.uniforms.set(data);
+		this.hasChanged = true;
+	}
+
+	recalculateProjectionMatrix() {
+		mat4.perspective(this.fov, this.aspect, this.near, this.far, this.uniforms.views.projection);
+		this.hasChanged = true;
 	}
 }
 
@@ -53,9 +62,9 @@ enum TrackballState {
 function isFlagSet(v: number, flag: number) { return (v & flag) === flag; }
 
 // Adapted from https://threejs.org/docs/#examples/en/controls/TrackballControls
-export default class TrackballController {
+export default class TrackballControls {
+	camera: Camera;
 	domElement: HTMLCanvasElement;
-	hasChanged = true;
 
 	#stateFlags = TrackballState.NONE;
 
@@ -85,7 +94,8 @@ export default class TrackballController {
 
 	get position() { return this.#position; }
 
-	constructor(domElement: HTMLCanvasElement, lookAt: Vec3 = vec3.fromValues(0, 0, 0), initialPosition: Vec3 = vec3.fromValues(0, 0, -2)) {
+	constructor(camera: Camera, domElement: HTMLCanvasElement, lookAt: Vec3 = vec3.fromValues(0, 0, 0), initialPosition: Vec3 = vec3.fromValues(0, 0, -2)) {
+		this.camera = camera;
 		this.domElement = domElement;
 
 		this.#lookAt = lookAt;
@@ -94,6 +104,15 @@ export default class TrackballController {
 
 		this.#currZoom = vec3.len(this.#eye);
 		this.#targetZoom = this.#currZoom;
+
+		mat4.lookAt(
+			this.#position,
+			this.#lookAt,
+			this.#up,
+			this.camera.uniforms.views.view
+		);
+
+		this.camera.set({ position: this.#position });
 
 		domElement.oncontextmenu = (e) => e.preventDefault();
 		domElement.onwheel = (e) => {
@@ -133,15 +152,6 @@ export default class TrackballController {
 		}		
 	}
 
-	getViewMatrix(dst?: Mat4) {
-		return mat4.lookAt(
-			this.#position,
-			this.#lookAt,
-			this.#up,
-			dst
-		);
-	}
-
 	update() {
 		if (this.#stateFlags === TrackballState.NONE) return;
 		
@@ -161,7 +171,16 @@ export default class TrackballController {
 			this.#position = vec3.add(this.#lookAt, this.#eye);
 		}
 
-		if (this.#stateFlags !== TrackballState.NONE) this.hasChanged = true;
+		if (this.#stateFlags !== TrackballState.NONE) {
+			mat4.lookAt(
+				this.#position,
+				this.#lookAt,
+				this.#up,
+				this.camera.uniforms.views.view
+			);
+
+			this.camera.set({ position: this.#position });
+		}
 	}
 
 	#rotateCamera(): boolean {
