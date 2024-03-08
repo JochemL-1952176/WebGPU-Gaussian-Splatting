@@ -4,7 +4,12 @@ import rasterizeShaderCode from './shaders/rasterize.wgsl?raw';
 import Scene from './scene';
 import { Camera } from './cameraControls';
 import GPUTimer from './GPUTimer';
-import Sorter from './sorter';
+import SplatSorter from './sorter';
+
+export type RenderTimings = {
+	sorting: number,
+	rendering: number
+};
 
 export default class Renderer {
 	cameraUniformsLayoutEntry: GPUBindGroupLayoutEntry;
@@ -15,24 +20,21 @@ export default class Renderer {
 	cameraUniformsBuffer: GPUBuffer;
 	controlsUniformsBuffer: GPUBuffer;
 	
-	primaryRenderBindGroupLayout: GPUBindGroupLayout;
-	#secondaryRenderBindGroup?: GPUBindGroup;
-	
-	#rasterShader: GPUShaderModule;
-	#renderPipeline?: GPURenderPipeline;
-	
-	colorFormat: GPUTextureFormat;
-	depthFormat: GPUTextureFormat = "depth32float";
+	#timer: GPUTimer;
+	#colorFormat: GPUTextureFormat;
 	#canvasContext: GPUCanvasContext;
+	#rasterShader: GPUShaderModule;
 	#renderPassDescriptor: GPURenderPassDescriptor;
-	#depthTextureDescriptor: GPUTextureDescriptor;
-	#depthTexture: GPUTexture;
+	primaryRenderBindGroupLayout: GPUBindGroupLayout;
 	
-	#sorter?: Sorter
-
+	#sorter?: SplatSorter;
+	#renderBundle?: GPURenderBundle;
+	
 	constructor(device: GPUDevice, canvasContext: GPUCanvasContext) {
 		this.#canvasContext = canvasContext;
-		this.colorFormat = canvasContext.getCurrentTexture().format;
+		this.#colorFormat = canvasContext.getCurrentTexture().format;
+
+		this.#timer = new GPUTimer(device, 6);
 
 		this.cameraUniformsLayoutEntry = {
 			binding: 0,
@@ -83,13 +85,6 @@ export default class Renderer {
 		});
 
 		device.queue.writeBuffer(this.controlsUniformsBuffer, 0, this.controlsUniforms.arrayBuffer);
-
-		this.#depthTextureDescriptor = {
-			size: [canvasContext.canvas.width, canvasContext.canvas.height],
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
-			format: this.depthFormat
-		};
-		this.#depthTexture = device.createTexture(this.#depthTextureDescriptor);
 		
 		this.#renderPassDescriptor = {
 			colorAttachments: [{
@@ -97,13 +92,7 @@ export default class Renderer {
 				loadOp: "clear",
 				clearValue: [0, 0, 0, 0],
 				storeOp: "store",
-			}],
-			depthStencilAttachment: {
-				view: this.#depthTexture!.createView(),
-				depthClearValue: 1.0,
-				depthLoadOp: "clear",
-				depthStoreOp: "store"
-			}
+			}]
 		};
 
 		this.setSize(device, canvasContext.canvas.width, canvasContext.canvas.height);
@@ -111,7 +100,7 @@ export default class Renderer {
 
 	finalize(device: GPUDevice, scene: Scene) {
 		this.#sorter?.destroy();
-		this.#sorter = new Sorter(device, this, scene);
+		this.#sorter = new SplatSorter(device, this, scene.splats);
 		
 		const secondaryRenderBindGroupLayout = device.createBindGroupLayout({
 			entries: [{
@@ -121,11 +110,11 @@ export default class Renderer {
 			}]
 		});
 
-		this.#secondaryRenderBindGroup = device.createBindGroup({
+		const secondaryRenderBindGroup = device.createBindGroup({
 			layout: secondaryRenderBindGroupLayout,
 			entries: [{
 				binding: 0,
-				resource: { buffer: this.#sorter!.entryBufferA! }
+				resource: { buffer: this.#sorter!.entryBufferA }
 			}]
 		});
 
@@ -134,7 +123,7 @@ export default class Renderer {
 			bindGroupLayouts: [this.primaryRenderBindGroupLayout, secondaryRenderBindGroupLayout]
 		});
 		
-		this.#renderPipeline = device.createRenderPipeline({
+		const renderPipeline = device.createRenderPipeline({
 			label: "render pipeline",
 			primitive: { topology: 'triangle-strip' },
 			layout: renderPipelineLayout,
@@ -143,66 +132,76 @@ export default class Renderer {
 				module: this.#rasterShader,
 				entryPoint: "fs",
 				targets: [{
-					format: this.colorFormat,
+					format: this.#colorFormat,
+					// dst.color = src.color * src.alpha + dst.color * (1 - src.alpha)
 					blend: {
 						alpha: {
-							srcFactor: "one",
-							dstFactor: "one-minus-src-alpha"
+							srcFactor: "one-minus-dst-alpha",
+							dstFactor: "one"
 						},
 						color: {
-							srcFactor: "src-alpha",
-							dstFactor: "one-minus-src-alpha"
+							srcFactor: "one-minus-dst-alpha",
+							dstFactor: "one"
 						}
 					}
 				}]
-			},
-			depthStencil: {
-				depthWriteEnabled: true,
-				format: "depth32float",
-				depthCompare: "less",
 			}
 		});
+
+		const renderPassEncoder = device.createRenderBundleEncoder({
+			colorFormats: [this.#colorFormat]
+		});
+
+		renderPassEncoder.setPipeline(renderPipeline);
+		renderPassEncoder.setBindGroup(0, scene.renderBindGroup);
+		renderPassEncoder.setBindGroup(1, secondaryRenderBindGroup);
+		renderPassEncoder.drawIndirect(this.#sorter.drawIndirectBuffer, 0);
+
+		this.#renderBundle = renderPassEncoder.finish();
 	}
 
-	renderFrame(device: GPUDevice, scene: Scene, camera: Camera, timer?: GPUTimer) {
-		console.assert(this.#sorter !== undefined, "Call finalize before rendering");
-		if (this.#renderPipeline === undefined) throw new Error();
-
+	renderFrame(device: GPUDevice, scene: Scene, camera: Camera) {
+		const finalized = this.#sorter !== undefined && this.#renderBundle !== undefined;
+		console.assert(finalized, "Call finalize before rendering");
+		if (!finalized) throw new Error();
+		const encoder = device.createCommandEncoder();
+		
 		if (camera.hasChanged) {		
 			device.queue.writeBuffer(this.cameraUniformsBuffer, 0, camera.uniforms.arrayBuffer);
 			camera.hasChanged = false;
 		}
 
-		const encoder = device.createCommandEncoder();
-		// this.#sorter!.sort(encoder, scene, timer);
-
+		this.#sorter!.sort(encoder, scene, this.#timer);
+		
 		this.#renderPassDescriptor.colorAttachments[0].view = this.#canvasContext.getCurrentTexture().createView();
-		const renderPass =
-			timer?.beginRenderPass(encoder, this.#renderPassDescriptor, 0) as GPURenderPassEncoder ??
-			encoder.beginRenderPass(this.#renderPassDescriptor);
-		
-		renderPass.setPipeline(this.#renderPipeline);
-		renderPass.setBindGroup(0, scene.renderBindGroup);
-		renderPass.setBindGroup(1, this.#secondaryRenderBindGroup!);
-		
-		renderPass.draw(4, scene.splats.count);
-		// renderPass.drawIndirect(this.#globalSortingBuffer!, this.#globalSortingBuffer!.size - 5 * Uint32Array.BYTES_PER_ELEMENT);
-		
+
+		const renderPass = this.#timer.beginRenderPass(encoder, this.#renderPassDescriptor, 5)
+		renderPass.executeBundles([this.#renderBundle!]);
 		renderPass.end();
+
 		device.queue.submit([encoder.finish()]);
 	}
 
-	setSize(device: GPUDevice, width: number, height: number) {
-		this.#depthTextureDescriptor.size = [width, height];
-		this.#depthTexture.destroy();
-		this.#depthTexture = device.createTexture(this.#depthTextureDescriptor);
-		this.#renderPassDescriptor.depthStencilAttachment!.view = this.#depthTexture.createView();
+	setSize(_device: GPUDevice, _width: number, _height: number) {}
+
+	timings: RenderTimings = { sorting: 0, rendering: 0 };
+	async getTimings() {
+		const results = await this.#timer.getResults();
+		if (results) {
+			this.timings.sorting = results
+				.slice(0, results.length - 1)
+				.reduce((acc: number, v: number) => acc + v)
+
+			this.timings.rendering = results[results.length - 1]
+		}
+
+		return this.timings;
 	}
 
 	destroy() {
 		this.cameraUniformsBuffer.destroy();
 		this.controlsUniformsBuffer.destroy();
 		this.#sorter?.destroy();
-		this.#depthTexture.destroy();
+		this.#timer.destroy();
 	}
 }

@@ -3,10 +3,9 @@ import TrackballControls, { PerspectiveCamera } from './cameraControls';
 import debugGaussiansURL from './assets/default.ply?url';
 import { loadGaussianData } from './loadGaussians';
 import loadCameras from './loadCameras';
-import Renderer from './renderer';
+import Renderer, { RenderTimings } from './renderer';
 import Scene from './scene';
 import { Pane } from 'tweakpane';
-import GPUTimer from './GPUTimer';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -34,23 +33,27 @@ context.configure({
 	alphaMode: "premultiplied"
 });
 
-const timer = new GPUTimer(device, 1);
-
 const renderer = new Renderer(device, context);
 let scene = await fetch(debugGaussiansURL)
 	.then(async response => await response.blob())
 	.then(async blob => await loadGaussianData(blob, device))
 	.then(async splats => new Scene(device, renderer, splats));
 
-const camera = new PerspectiveCamera(utils.degToRad(60), canvas.width / canvas.height, 0.01, 1000, renderer.cameraUniforms);
+const camera = new PerspectiveCamera(utils.degToRad(60), canvas.width / canvas.height, 0.01, 100, renderer.cameraUniforms);
 const controls = new TrackballControls(camera, canvas);
 
-const telemetry = {
+type Telemetry = {
+	fps: number,
+	frameTime: number,
+	jsTime: number,
+} & RenderTimings;
+
+const telemetry: Telemetry = {
 	fps: 0,
 	frameTime: 0,
 	jsTime: 0,
-	// sortTime: 0,
-	renderTime: 0,
+	sorting: 0,
+	rendering: 0,
 };
 
 let accTime = 0;
@@ -72,16 +75,16 @@ function frame(frameStart: number) {
 	}
 
 	// DRAW
-	renderer.renderFrame(device, scene, camera, timer);
+	renderer.renderFrame(device, scene, camera);
 
 	// TELEMETRY
-	telemetry.fps = 1000 / deltaTime;
 	telemetry.frameTime = deltaTime;
+	telemetry.fps = 1000 / telemetry.frameTime;
 	telemetry.jsTime = performance.now() - frameStart;
-	timer.getResults([
-		// (v: number) => telemetry.sortTime = v,
-		(v: number) => telemetry.renderTime = v
-	]);
+	renderer.getTimings().then((timings: RenderTimings) => {
+		telemetry.sorting = timings.sorting;
+		telemetry.rendering = timings.rendering;
+	});
 };
 
 requestAnimationFrame(frame);
@@ -95,11 +98,12 @@ function onResize() {
 
 	camera.aspect = canvas.width / canvas.height;
 	
-	const htany = Math.tan(camera.fov / 2);
-	const tan_fov = vec2.fromValues((htany / canvas.height) * canvas.width, htany);
-	const focal = vec2.fromValues(canvas.width / (2 * tan_fov[0]), canvas.height / (2 * tan_fov[1]));
+	const focalY = canvas.height / (2 * Math.tan(camera.fov / 2));
+
+	const tanHalfFov = vec2.fromValues(canvas.width / (2 * focalY), canvas.height / (2 * focalY));
+	const focal = vec2.fromValues(focalY, focalY);
 	
-	camera.set({tan_fov, focal});
+	camera.set({tanHalfFov, focal});
 	camera.recalculateProjectionMatrix();
 };
 
@@ -123,16 +127,13 @@ plyButton.on('click', () => plyInput.click());
 
 plyInput.onchange = async (_) => {
 	if (plyInput.files && plyInput.files.length) {
-		const fileType = plyInput.files[0].name.split('.').pop()!;
-		if (fileType === "ply") {
-			const splats = await loadGaussianData(plyInput.files[0], device);
-			scene.destroy();
-			scene = new Scene(device, renderer, splats);
-			cameraFolder.hidden = true;
-
-		} else console.error(`Filetype ${fileType} is not supported`);
+		let currentCameras = scene.cameras;
+		const splats = await loadGaussianData(plyInput.files[0], device);
+		scene.destroy();
+		scene = new Scene(device, renderer, splats);
+		scene.cameras = currentCameras;
 	}
-	plyInput.value = ""
+	plyInput.value = "";
 };
 
 const cameraInput = document.getElementById("cameraInput") as HTMLInputElement;
@@ -161,16 +162,13 @@ function setActiveCamera(idx: number) {
 
 cameraInput.onchange = async (_) => {
 	if (cameraInput.files && cameraInput.files.length) {
-		const fileType = cameraInput.files[0].name.split('.').pop()!;
-		if (fileType === "json") {
-			scene.cameras = await loadCameras(cameraInput.files[0]);
+		scene.cameras = await loadCameras(cameraInput.files[0]);
 
-			cameraFolder.hidden = false;
-			(cameraSelector as any).min = 0;
-			(cameraSelector as any).max = scene.cameras.length - 1;
+		cameraFolder.hidden = false;
+		(cameraSelector as any).min = 0;
+		(cameraSelector as any).max = scene.cameras.length - 1;
 
-			setActiveCamera(0);
-		} else console.error(`Filetype ${fileType} is not supported`);
+		setActiveCamera(0);
 	}
 	cameraInput.value = "";
 };
@@ -195,7 +193,7 @@ SHUpdate();
 
 const scaleSlider = controlsFolder.addBinding(renderer.controlsUniforms.views.scaleMod, '0', {
 	label: 'Gaussian scale modifier',
-	min: 0, max: 3, step: 0.01, value: 1
+	min: 0, max: 1, step: 0.01, value: 1
 });
 
 function scaleUpdate() {
@@ -214,7 +212,7 @@ const telemetryFolder = pane.addFolder({ title: "Telemetry" });
 telemetryFolder.addBinding(telemetry, 'fps', {
 	readonly: true,
 	label: 'FPS',
-	format: (v: number) => `${Math.round(v)} FPS`,
+	format: (v: number) => `${Math.round(v)} FPS`
 });
 
 telemetryFolder.addBinding(telemetry, 'frameTime', {
@@ -233,15 +231,15 @@ telemetryFolder.addBinding(telemetry, 'jsTime', {
 	min: 0, max: 100/3
 });
 
-// telemetryFolder.addBinding(telemetry, 'sortTime', {
-// 	readonly: true,
-// 	view: 'graph',
-// 	label: 'Sort time',
-// 	format: (v: number) => `${v.toFixed(2)}μs`,
-// 	min: 0, max: 100000/3
-// });
+telemetryFolder.addBinding(telemetry, 'sorting', {
+	readonly: true,
+	view: 'graph',
+	label: 'Sort time',
+	format: (v: number) => `${v.toFixed(2)}μs`,
+	min: 0, max: 100000/3
+});
 
-telemetryFolder.addBinding(telemetry, 'renderTime', {
+telemetryFolder.addBinding(telemetry, 'rendering', {
 	readonly: true,
 	view: 'graph',
 	label: 'Render time',

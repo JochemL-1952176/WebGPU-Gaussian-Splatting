@@ -3,7 +3,7 @@ struct Camera {
 	view: mat4x4f,
 	projection: mat4x4f,
 	focal: vec2f,
-	tan_fov: vec2f
+	tanHalfFov: vec2f
 };
 
 struct Entry { key: u32, value: u32 };
@@ -36,7 +36,7 @@ fn readVec4(offset: u32) -> vec4f {
 }
 
 fn isInFrustum(clipPos: vec3f) -> bool {
-    return 	abs(clipPos.x) < 1.3 &&
-			abs(clipPos.y) < 1.3 &&
-			abs(clipPos.z - 0.5) < 0.5;
+	return 	abs(clipPos.x) <= 1.3 &&
+			abs(clipPos.y) <= 1.3 &&
+			abs(clipPos.z - 0.5) <= 0.5;
 }

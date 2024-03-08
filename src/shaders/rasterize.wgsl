@@ -62,30 +62,39 @@ fn computeColorFromSH(pos: vec3f, baseIndex: u32) -> vec3f {
 	return saturate(color + 0.5);
 }
 
-fn computeCov3D(scale: vec3f, rotation: vec4f) -> mat3x3f {
+fn computeCov3D(scale: vec3f, rotation: vec4f) -> array<f32, 6> {
 	var S = mat3x3f();
 	S[0][0] = controls.scaleMod * scale.x;
 	S[1][1] = controls.scaleMod * scale.y;
 	S[2][2] = controls.scaleMod * scale.z;
 
-	let r = rotation.x;
-	let x = rotation.y;
-	let y = rotation.z;
-	let z = rotation.w;
+	let normRot = normalize(rotation);
+	let r = normRot.x;
+	let x = normRot.y;
+	let y = normRot.z;
+	let z = normRot.w;
 
 	let R = mat3x3f(
-		1 - 2 * (y * y + z * z), 2 * (x * y - r * z), 2 * (x * z + r * y),
-		2 * (x * y + r * z), 1 - 2 * (x * x + z * z), 2 * (y * z - r * x),
-		2 * (x * z - r * y), 2 * (y * z + r * x), 1 - 2 * (x * x + y * y),
+		1.0 - 2 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
+		2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
+		2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y),
 	);
 
 	let M = S * R;
-	return transpose(M) * M;
+	let Sigma = transpose(M) * M;
+	return array(
+		Sigma[0][0],
+		Sigma[0][1],
+		Sigma[0][2],
+		Sigma[1][1],
+		Sigma[1][2],
+		Sigma[2][2]
+	);
 }
 
-fn computeCov2D(mean: vec3f, cov3D: mat3x3f) -> vec3f {
-	let limx = 1.3 * cam.tan_fov.x;
-	let limy = 1.3 * cam.tan_fov.y;
+fn computeCov2D(mean: vec3f, cov3D: array<f32, 6>) -> vec3f {
+	let limx = 1.3 * cam.tanHalfFov.x;
+	let limy = 1.3 * cam.tanHalfFov.y;
 
 	var t = cam.view * vec4f(mean, 1);
 	let txytz = t.xy / t.z;
@@ -101,7 +110,12 @@ fn computeCov2D(mean: vec3f, cov3D: mat3x3f) -> vec3f {
 	let W = transpose(mat3x3f(cam.view[0].xyz, cam.view[1].xyz, cam.view[2].xyz));
 	let T = W * J;
 
-	var cov = transpose(T) * transpose(cov3D) * T;
+	let Vrk = mat3x3f(
+		cov3D[0], cov3D[1], cov3D[2],
+		cov3D[1], cov3D[3], cov3D[4],
+		cov3D[2], cov3D[4], cov3D[5]);
+
+	var cov = transpose(T) * transpose(Vrk) * T;
 	cov[0][0] += 0.3;
 	cov[1][1] += 0.3;
 	return vec3f(cov[0][0], cov[0][1], cov[1][1]);
@@ -123,13 +137,11 @@ struct VertexOut {
 const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 @vertex fn vs(in: VertexIn) -> VertexOut {
 	var out = VertexOut();
-	// let entry = sorted_entries[in.instanceIndex];
+	let entry = sorted_entries[in.instanceIndex];
 
-	let baseIndex = in.instanceIndex * stride;
+	let baseIndex = entry.value * stride;
 	
 	let pos = readVec3(baseIndex + posOffset);
-	var projPos = cam.projection * cam.view * vec4f(pos, 1);
-	projPos /= projPos.w;
 
 	out.opacity = gaussianData[baseIndex + opacityOffset];
 	let scale = readVec3(baseIndex + scaleOffset);
@@ -149,11 +161,13 @@ const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 	let mid = 0.5 * (cov2d.x + cov2d.z);
 	let lambda1 = mid + sqrt(max(0.1, mid * mid - det));
 	let lambda2 = mid - sqrt(max(0.1, mid * mid - det));
-	let radius_pix = ceil(4 * sqrt(max(lambda1, lambda2)));
-	let wh = 2 * cam.tan_fov * cam.focal;
+	let radius_pix = ceil(3 * sqrt(max(lambda1, lambda2)));
+	let wh = 2 * cam.tanHalfFov * cam.focal;
 	let radius_ndc = vec2f(radius_pix) / wh;
 
 	let quadOffset = quad[in.vertexIndex];
+	var projPos = cam.projection * cam.view * vec4f(pos, 1);
+	projPos /= projPos.w;
 	
 	out.pos = vec4f(projPos.xy + 2 * radius_ndc * quadOffset, projPos.zw);
 	out.uv = radius_pix * quadOffset;
@@ -168,7 +182,6 @@ const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 	if (power > 0) { discard; }
 
 	let alpha = min(1, in.opacity * exp(power));
-	if (alpha < 0.2) { discard; }
 
-	return vec4f(in.color, 1);
+	return vec4f(alpha * in.color, alpha);
 }
