@@ -39,7 +39,7 @@ let scene = await fetch(debugGaussiansURL)
 	.then(async blob => await loadGaussianData(blob, device))
 	.then(async splats => new Scene(device, renderer, splats));
 
-const camera = new PerspectiveCamera(utils.degToRad(60), canvas.width / canvas.height, 0.01, 100, renderer.cameraUniforms);
+const camera = new PerspectiveCamera(utils.degToRad(60), canvas.width / canvas.height, .1, 100, renderer.cameraUniforms);
 const controls = new TrackballControls(camera, canvas);
 
 type Telemetry = {

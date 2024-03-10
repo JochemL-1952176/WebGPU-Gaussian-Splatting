@@ -38,5 +38,5 @@ fn readVec4(offset: u32) -> vec4f {
 fn isInFrustum(clipPos: vec3f) -> bool {
 	return 	abs(clipPos.x) <= 1.3 &&
 			abs(clipPos.y) <= 1.3 &&
-			abs(clipPos.z - 0.5) <= 0.5;
+			abs(clipPos.z * 2 - 1) <= 1.3;
 }
