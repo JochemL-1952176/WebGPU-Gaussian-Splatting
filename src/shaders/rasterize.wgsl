@@ -183,5 +183,5 @@ const quad = array(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
 
 	let alpha = min(1, in.opacity * exp(power));
 
-	return vec4f(alpha * in.color, alpha);
+	return vec4f(in.color, alpha);
 }

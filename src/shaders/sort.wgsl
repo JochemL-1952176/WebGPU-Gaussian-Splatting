@@ -52,8 +52,7 @@ fn histogram(
 		var clipPos = cam.projection * cam.view * vec4f(pos, 1);
 		clipPos /= clipPos.w;
 		if (isInFrustum(clipPos.xyz)) {
-			// key = bitcast<u32>(clipPos.z);
-			key = bitcast<u32>(distance(cam.position, pos));
+			key = bitcast<u32>(1.0 - clipPos.z);
 		}
 
 		entriesOut[entry_index] = Entry(key, entry_index);

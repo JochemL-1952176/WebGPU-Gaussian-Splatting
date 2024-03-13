@@ -1,9 +1,9 @@
 import sharedShaderCode from './shaders/shared.wgsl?raw';
 import sortShaderCode from './shaders/sort.wgsl?raw';
 import Scene from "./scene";
-import Renderer from './renderer';
 import GPUTimer from './GPUTimer';
 import { GPUSplats } from './loadGaussians';
+import { SortingRenderer } from './renderer';
 
 const workgroup_entries_a = 4096;
 const workgroup_entries_c = 1024;
@@ -23,7 +23,7 @@ export default class SplatSorter {
 	#prefixSumPipeline: GPUComputePipeline;
 	#binningPipeline: GPUComputePipeline;
 
-	constructor(device: GPUDevice, renderer: Renderer, splats: GPUSplats) {
+	constructor(device: GPUDevice, renderer: SortingRenderer, splats: GPUSplats) {
 		const entryBufferDescriptor: GPUBufferDescriptor = {
 			usage: GPUBufferUsage.STORAGE,
 			size: splats.count * Uint32Array.BYTES_PER_ELEMENT * 2
@@ -74,8 +74,8 @@ export default class SplatSorter {
 		const sortBindGroupLayout = device.createBindGroupLayout({
 			label: "Sort bind group layout",
 			entries: [
-				renderer.cameraUniformsLayoutEntry,
-				renderer.gaussiansLayoutEntry,
+				renderer.common.cameraUniformsLayoutEntry,
+				renderer.common.gaussiansLayoutEntry,
 				{
 					binding: 2,
 					visibility: GPUShaderStage.COMPUTE,
@@ -103,10 +103,10 @@ export default class SplatSorter {
 			return device.createBindGroup({
 				layout: sortBindGroupLayout,
 				entries: [{
-						binding: renderer.cameraUniformsLayoutEntry.binding,
-						resource: { buffer: renderer.cameraUniformsBuffer }
+						binding: renderer.common.cameraUniformsLayoutEntry.binding,
+						resource: { buffer: renderer.common.cameraUniformsBuffer }
 					}, {
-						binding: renderer.gaussiansLayoutEntry.binding,
+						binding: renderer.common.gaussiansLayoutEntry.binding,
 						resource: { buffer: splats.buffer }
 					}, {
 						binding: 2,

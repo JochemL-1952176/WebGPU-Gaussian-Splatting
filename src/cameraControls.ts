@@ -1,5 +1,5 @@
 import { StructuredView } from "webgpu-utils";
-import { Mat3, mat4, quat, vec2, vec3, Vec3 } from "wgpu-matrix";
+import { Mat3, mat4, quat, utils, vec2, vec3, Vec3 } from "wgpu-matrix";
 
 const UP = vec3.fromValues(0, -1, 0);
 const FORWARD = vec3.fromValues(0, 0, 1);
@@ -35,7 +35,7 @@ export class PerspectiveCamera implements Camera {
 	}
 
 	recalculateProjectionMatrix() {
-		mat4.perspective(this.fov, this.aspect, this.near, this.far, this.uniforms.views.projection);
+		mat4.perspective(utils.degToRad(this.fov), this.aspect, this.near, this.far, this.uniforms.views.projection);
 		this.hasChanged = true;
 	}
 }

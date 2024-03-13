@@ -9,12 +9,13 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.40",
     "@tweakpane/core": "^2.0.3",
+    "@webgpu/types": "^0.1.40",
     "typescript": "^5.2.2",
     "vite": "^5.0.8"
   },
   "dependencies": {
+    "@tweakpane/plugin-essentials": "^0.2.1",
     "tweakpane": "^4.0.3",
     "webgpu-utils": "^1.0.2",
     "wgpu-matrix": "^2.5.1"

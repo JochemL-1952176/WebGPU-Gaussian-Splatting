@@ -1,6 +1,6 @@
 import { CameraData } from "./loadCameras";
 import { GPUSplats } from "./loadGaussians";
-import Renderer from "./renderer";
+import { Renderer } from "./renderer";
 
 export default class Scene {
 	splats: GPUSplats;
@@ -13,16 +13,16 @@ export default class Scene {
 
 		this.renderBindGroup = device.createBindGroup({
 			label: "render bindgroup",
-			layout: renderer.primaryRenderBindGroupLayout,
+			layout: renderer.common.primaryRenderBindGroupLayout,
 			entries: [{
-					binding: renderer.cameraUniformsLayoutEntry.binding,
-					resource: { buffer: renderer.cameraUniformsBuffer }
+					binding: renderer.common.cameraUniformsLayoutEntry.binding,
+					resource: { buffer: renderer.common.cameraUniformsBuffer }
 				}, {
-					binding: renderer.gaussiansLayoutEntry.binding,
+					binding: renderer.common.gaussiansLayoutEntry.binding,
 					resource: { buffer: splats.buffer }
 				}, {
-					binding: renderer.controlsUniformsLayoutEntry.binding,
-					resource: { buffer: renderer.controlsUniformsBuffer }
+					binding: renderer.common.controlsUniformsLayoutEntry.binding,
+					resource: { buffer: renderer.common.controlsUniformsBuffer }
 				}
 			]
 		});
