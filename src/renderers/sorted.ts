@@ -1,29 +1,17 @@
-import { StructuredView, makeShaderDataDefinitions, makeStructuredView } from 'webgpu-utils';
-import sharedShaderCode from './shaders/shared.wgsl?raw';
-import rasterizeShaderCode from './shaders/rasterize.wgsl?raw';
-import Scene from './scene';
-import { Camera } from './cameraControls';
-import GPUTimer from './GPUTimer';
-import SplatSorter from './sorter';
-import { BindingApi, FolderApi } from '@tweakpane/core';
-import { Pane } from 'tweakpane';
+import { BindingApi, FolderApi } from "@tweakpane/core";
+import GPUTimer from "../GPUTimer";
+import SplatSorter from "../sorter";
+import { Renderer } from "./renderer";
+import CommonRendererData from "./common";
+import Scene from "../scene";
 
-export abstract class Renderer {
-	common: CommonRendererData;
-
-	constructor(common: CommonRendererData) {
-		this.common = common;
-	}
-
-	abstract finalize(device: GPUDevice, scene: Scene): void;
-	abstract renderFrame(device: GPUDevice, scene: Scene, camera: Camera): void;
-	abstract setSize(device: GPUDevice, width: number, height: number): void;
-	abstract telemetryPanes(root: FolderApi | Pane, interval: number): void;
-	abstract destroy(): void;
-}
+import sharedShaderCode from '../shaders/shared.wgsl?raw';
+import sharedRasterizeShaderCode from '../shaders/sharedRasterize.wgsl?raw';
+import sortedRasterizeShaderCode from '../shaders/sortedRasterize.wgsl?raw';
+import { Camera } from "../cameraControls";
+import { Pane } from "tweakpane";
 
 export class SortingRenderer extends Renderer {
-
 	#rasterShader: GPUShaderModule;
 	#renderPassDescriptor: GPURenderPassDescriptor;
 	
@@ -40,11 +28,11 @@ export class SortingRenderer extends Renderer {
 	#renderingTelemetryBinding?: BindingApi<unknown, number>;
 	
 	constructor(device: GPUDevice, common: CommonRendererData) {
-		super(common);
+		super(device, common);
 
 		this.#timer = new GPUTimer(device, 6);
 
-		const rasterCode = sharedShaderCode + rasterizeShaderCode;
+		const rasterCode = sharedShaderCode + sharedRasterizeShaderCode + sortedRasterizeShaderCode;
 		this.#rasterShader = device.createShaderModule({ code: rasterCode });
 		
 		this.#renderPassDescriptor = {
@@ -142,6 +130,7 @@ export class SortingRenderer extends Renderer {
 	}
 
 	setSize(_device: GPUDevice, _width: number, _height: number) {}
+	controlPanes(_root: FolderApi | Pane, _device: GPUDevice): void {};
 
 	telemetryPanes(root: FolderApi | Pane, interval: number = 50) {
 		this.#sortingTelemetryBinding = root.addBinding(this.#telemetry, 'sorting', {
@@ -180,91 +169,5 @@ export class SortingRenderer extends Renderer {
 		this.#timer.destroy();
 		this.#sortingTelemetryBinding?.dispose();
 		this.#renderingTelemetryBinding?.dispose();
-	}
-}
-
-type rendererConstructor<T extends Renderer> = new(device: GPUDevice, common: CommonRendererData, ...args: any[]) => T;
-export default class RendererFactory {
-	#commonData: CommonRendererData;
-
-	constructor(device: GPUDevice, canvasContext: GPUCanvasContext) {
-		this.#commonData = new CommonRendererData(device, canvasContext);
-	}
-
-	createRenderer<T extends Renderer>(device: GPUDevice, type: rendererConstructor<T>, ...args: any[]): T {
-		return new type(device, this.#commonData, ...args);
-	}
-
-	destroy() {
-		this.#commonData.destroy();
-	}
-}
-
-class CommonRendererData {
-	cameraUniformsLayoutEntry: GPUBindGroupLayoutEntry;
-	controlsUniformsLayoutEntry: GPUBindGroupLayoutEntry;
-	gaussiansLayoutEntry: GPUBindGroupLayoutEntry;
-	cameraUniforms: StructuredView;
-	controlsUniforms: StructuredView;
-	cameraUniformsBuffer: GPUBuffer;
-	controlsUniformsBuffer: GPUBuffer;
-	primaryRenderBindGroupLayout: GPUBindGroupLayout;
-
-	canvasContext: GPUCanvasContext
-
-	constructor(device: GPUDevice, canvasContext: GPUCanvasContext) {
-		this.canvasContext= canvasContext;
-
-		this.cameraUniformsLayoutEntry = {
-			binding: 0,
-			visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX,
-			buffer: { type: "uniform" }
-		};
-
-		this.gaussiansLayoutEntry = {
-			binding: 1,
-			visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX,
-			buffer: { type: "read-only-storage" }
-		}; 
-
-		this.controlsUniformsLayoutEntry = {
-			binding: 2,
-			visibility: GPUShaderStage.VERTEX,
-			buffer: { type: "uniform" }
-		};
-
-		const rasterCode = sharedShaderCode + rasterizeShaderCode;
-		const shaderData = makeShaderDataDefinitions(rasterCode);
-		this.cameraUniforms = makeStructuredView(shaderData.structs.Camera);
-		this.controlsUniforms = makeStructuredView(shaderData.structs.RenderControls);
-		this.controlsUniforms.set({ maxSH: 3, scaleMod: 1 });
-
-		this.cameraUniformsBuffer = device.createBuffer({
-			label: "Camera uniforms buffer",
-			size: this.cameraUniforms.arrayBuffer.byteLength,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-		});
-		
-		this.controlsUniformsBuffer = device.createBuffer({
-			label: "Controls uniforms buffer",
-			size: this.controlsUniforms.arrayBuffer.byteLength,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-		});
-		
-		device.queue.writeBuffer(this.controlsUniformsBuffer, 0, this.controlsUniforms.arrayBuffer);
-
-		this.primaryRenderBindGroupLayout = device.createBindGroupLayout({
-			label: "render bindgroup layout",
-			entries: [
-				this.cameraUniformsLayoutEntry,
-				this.gaussiansLayoutEntry,
-				this.controlsUniformsLayoutEntry
-			]
-		});
-	}
-
-	destroy() {
-		this.cameraUniformsBuffer.destroy();
-		this.controlsUniformsBuffer.destroy();
 	}
 }

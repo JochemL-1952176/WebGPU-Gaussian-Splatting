@@ -3,7 +3,7 @@ import sortShaderCode from './shaders/sort.wgsl?raw';
 import Scene from "./scene";
 import GPUTimer from './GPUTimer';
 import { GPUSplats } from './loadGaussians';
-import { SortingRenderer } from './renderer';
+import { SortingRenderer } from './renderers';
 
 const workgroup_entries_a = 4096;
 const workgroup_entries_c = 1024;

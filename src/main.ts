@@ -3,10 +3,11 @@ import TrackballControls, { PerspectiveCamera } from './cameraControls';
 import debugGaussiansURL from './assets/default.ply?url';
 import { loadGaussianData } from './loadGaussians';
 import loadCameras from './loadCameras';
-import RendererFactory, { SortingRenderer } from './renderer';
+import RendererFactory, { Renderer, rendererConstructor } from './renderers/renderer';
 import Scene from './scene';
 import { ListBladeApi, Pane } from 'tweakpane';
 import * as EssentialsPlugin from '@tweakpane/plugin-essentials';
+import { BasicRenderer, SortingRenderer } from './renderers';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -34,8 +35,20 @@ context.configure({
 	alphaMode: "premultiplied"
 });
 
+type RendererIndex = {
+	name: string,
+	type: rendererConstructor<Renderer>
+}
+
+const renderers: Array<RendererIndex> = [
+	{ name: "Basic", type: BasicRenderer },
+	{ name: "Sorted", type: SortingRenderer },
+];
+
+let currentRendererIdx = 1;
+
 const rendererFactory = new RendererFactory(device, context); 
-let renderer = rendererFactory.createRenderer(device, SortingRenderer);
+let renderer: Renderer = rendererFactory.createRenderer(device, renderers[currentRendererIdx].type);
 let scene = await fetch(debugGaussiansURL)
 	.then(async response => await response.blob())
 	.then(async blob => await loadGaussianData(blob, device))
@@ -165,6 +178,25 @@ cameraInput.onchange = async (_) => {
 	cameraInput.value = "";
 };
 
+(pane.addBlade({
+	view: 'radiogrid',
+	groupName: 'renderer',
+	size: [2, 1],
+	cells: (x: number, _y: number) => ({
+		title: renderers[x].name.charAt(0).toUpperCase() + renderers[x].name.slice(1),
+		value: x,
+	}),
+	value: currentRendererIdx
+}) as EssentialsPlugin.RadioGridApi<number>).on('change', (e) => {
+	currentRendererIdx = e.value;
+	renderer.destroy();
+	renderer = rendererFactory.createRenderer(device, renderers[currentRendererIdx].type);
+	renderer.finalize(device, scene);
+	
+	renderer.controlPanes(controlsFolder, device);
+	renderer.telemetryPanes(telemetryFolder, GRAPHREFRESHINTERVAL);
+});
+
 const controlsFolder = pane.addFolder({ title: "controls" });
 
 const SHSlider = controlsFolder.addBinding(renderer.common.controlsUniforms.views.maxSH, '0', {
@@ -226,8 +258,6 @@ telemetryFolder.addBinding(telemetry, 'jsTime', {
 	interval: GRAPHREFRESHINTERVAL
 });
 
-renderer.telemetryPanes(telemetryFolder, GRAPHREFRESHINTERVAL);
-
 const cameraFolder = pane.addFolder({ title: "Camera" });
 
 const cameraSelection = cameraFolder.addBlade({
@@ -267,22 +297,15 @@ cameraFolder.addBinding(camera, 'fov', {
 cameraFolder.addBinding(camera, 'near', {
 	label: "Near",
 	min: 0
-}).on('change', () => camera.recalculateProjectionMatrix() );
+}).on('change', () => camera.recalculateProjectionMatrix());
 
 cameraFolder.addBinding(camera, 'far', {
 	label: "Far",
 	min: 0
 }).on('change', () => camera.recalculateProjectionMatrix());
 
-pane.addButton({
-	title: "Test",
-}).on('click', () => {
-	renderer.destroy();
-	renderer = rendererFactory.createRenderer(device, SortingRenderer);
-	renderer.finalize(device, scene);
-	renderer.telemetryPanes(telemetryFolder, GRAPHREFRESHINTERVAL);
-});
-
+renderer.controlPanes(controlsFolder, device);
+renderer.telemetryPanes(telemetryFolder, GRAPHREFRESHINTERVAL);
 
 onResize();
 requestAnimationFrame(frame);

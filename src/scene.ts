@@ -1,6 +1,6 @@
 import { CameraData } from "./loadCameras";
 import { GPUSplats } from "./loadGaussians";
-import { Renderer } from "./renderer";
+import { Renderer } from "./renderers";
 
 export default class Scene {
 	splats: GPUSplats;
