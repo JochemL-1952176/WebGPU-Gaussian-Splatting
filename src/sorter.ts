@@ -1,5 +1,5 @@
-import sharedShaderCode from './shaders/shared.wgsl?raw';
-import sortShaderCode from './shaders/sort.wgsl?raw';
+import sharedShaderCode from '@shaders/shared.wgsl?raw';
+import sortShaderCode from '@shaders/sort.wgsl?raw';
 import Scene from "./scene";
 import GPUTimer from './GPUTimer';
 import { GPUSplats } from './loadGaussians';
@@ -167,7 +167,7 @@ export default class SplatSorter {
 
 		let computePass = timer.beginComputePass(encoder, {}, 0);
 			
-		computePass.setBindGroup(0, this.#sortBindGroups![1]);
+		computePass.setBindGroup(0, this.#sortBindGroups[1]);
 		computePass.setPipeline(this.#histogramPipeline);
 		computePass.dispatchWorkgroups((scene.splats.count + workgroup_entries_a - 1) / workgroup_entries_a);
 
@@ -175,7 +175,7 @@ export default class SplatSorter {
 		computePass.dispatchWorkgroups(1, 4);
 		computePass.end();
 		
-		this.#sortBindGroups!.forEach((bindgroup, pass_index) => {
+		this.#sortBindGroups.forEach((bindgroup, pass_index) => {
 			encoder.clearBuffer(this.#statusCounterBuffer);
 			const computePass = timer.beginComputePass(encoder, {}, pass_index + 1);
 			
@@ -187,11 +187,11 @@ export default class SplatSorter {
 	}
 
 	destroy() {
-		this.entryBufferA?.destroy();
-		this.#entryBufferB?.destroy();
-		this.#sortingPassBuffers?.forEach((buffer) => buffer.destroy());
-		this.#globalSortingBuffer?.destroy();
-		this.drawIndirectBuffer?.destroy();
-		this.#statusCounterBuffer?.destroy();
+		this.entryBufferA.destroy();
+		this.#entryBufferB.destroy();
+		this.#sortingPassBuffers.forEach((buffer) => buffer.destroy());
+		this.#globalSortingBuffer.destroy();
+		this.drawIndirectBuffer.destroy();
+		this.#statusCounterBuffer.destroy();
 	}
 }

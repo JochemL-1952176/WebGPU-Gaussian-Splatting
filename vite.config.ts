@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vite';
+import * as path from "path";
 
 export default defineConfig({
 	build: { target: "esnext" },
@@ -10,6 +11,12 @@ export default defineConfig({
 			"Cross-Origin-Embedder-Policy": "require-corp",
 			"Cross-Origin-Opener-Policy": "same-origin",
 		  },
+	},
+	resolve: {
+		alias: {
+			"@assets": path.resolve(__dirname, "src/assets"),
+			"@shaders": path.resolve(__dirname, "src/shaders")
+		}
 	}
 
 })

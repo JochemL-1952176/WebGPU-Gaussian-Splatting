@@ -5,9 +5,9 @@ import { Renderer } from "./renderer";
 import CommonRendererData from "./common";
 import Scene from "../scene";
 
-import sharedShaderCode from '../shaders/shared.wgsl?raw';
-import sharedRasterizeShaderCode from '../shaders/sharedRasterize.wgsl?raw';
-import sortedRasterizeShaderCode from '../shaders/sortedRasterize.wgsl?raw';
+import sharedShaderCode from '@shaders/shared.wgsl?raw';
+import sharedRasterizeShaderCode from '@shaders/sharedRasterize.wgsl?raw';
+import sortedRasterizeShaderCode from '@shaders/sortedRasterize.wgsl?raw';
 import { Camera } from "../cameraControls";
 import { Pane } from "tweakpane";
 

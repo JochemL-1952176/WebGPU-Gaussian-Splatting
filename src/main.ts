@@ -1,13 +1,14 @@
 import { utils, vec2 } from 'wgpu-matrix';
 import TrackballControls, { PerspectiveCamera } from './cameraControls';
-import debugGaussiansURL from './assets/default.ply?url';
+import debugGaussiansURL from '@assets/default.ply?url';
 import { loadGaussianData } from './loadGaussians';
 import loadCameras from './loadCameras';
 import RendererFactory, { Renderer, rendererConstructor } from './renderers/renderer';
 import Scene from './scene';
 import { ListBladeApi, Pane } from 'tweakpane';
 import * as EssentialsPlugin from '@tweakpane/plugin-essentials';
-import { BasicRenderer, SortingRenderer } from './renderers';
+import { ClippedRenderer, SortingRenderer } from './renderers';
+import { StochasticRenderer } from './renderers/stochastic';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -35,26 +36,23 @@ context.configure({
 	alphaMode: "premultiplied"
 });
 
-type RendererIndex = {
-	name: string,
-	type: rendererConstructor<Renderer>
-}
+const renderers: Record<string, rendererConstructor<Renderer>> = {
+	sorted: SortingRenderer,
+	clipped:  ClippedRenderer,
+	stochastic: StochasticRenderer,
+};
 
-const renderers: Array<RendererIndex> = [
-	{ name: "Basic", type: BasicRenderer },
-	{ name: "Sorted", type: SortingRenderer },
-];
-
-let currentRendererIdx = 1;
+let currentRenderer = "sorted";
 
 const rendererFactory = new RendererFactory(device, context); 
-let renderer: Renderer = rendererFactory.createRenderer(device, renderers[currentRendererIdx].type);
 let scene = await fetch(debugGaussiansURL)
 	.then(async response => await response.blob())
 	.then(async blob => await loadGaussianData(blob, device))
-	.then(async splats => new Scene(device, renderer, splats));
+	.then(async splats => new Scene(device, rendererFactory.commonData, splats));
 
-const camera = new PerspectiveCamera(60, canvas.width / canvas.height, .1, 100, renderer.common.cameraUniforms);
+let renderer: Renderer = rendererFactory.createRenderer(device, scene, renderers[currentRenderer]);
+
+const camera = new PerspectiveCamera(60, canvas.width / canvas.height, .1, 1000, renderer.common.cameraUniforms);
 const controls = new TrackballControls(camera, canvas);
 
 const telemetry = {
@@ -141,7 +139,9 @@ plyInput.onchange = async (_) => {
 	if (plyInput.files && plyInput.files.length) {
 		const splats = await loadGaussianData(plyInput.files[0], device);
 		scene.destroy();
-		scene = new Scene(device, renderer, splats);
+		scene = new Scene(device, rendererFactory.commonData, splats);
+		renderer.finalize(device, scene);
+
 		cameraSelection.hidden = true;
 	}
 	plyInput.value = "";
@@ -181,16 +181,20 @@ cameraInput.onchange = async (_) => {
 (pane.addBlade({
 	view: 'radiogrid',
 	groupName: 'renderer',
-	size: [2, 1],
-	cells: (x: number, _y: number) => ({
-		title: renderers[x].name.charAt(0).toUpperCase() + renderers[x].name.slice(1),
-		value: x,
-	}),
-	value: currentRendererIdx
-}) as EssentialsPlugin.RadioGridApi<number>).on('change', (e) => {
-	currentRendererIdx = e.value;
+	size: [Object.keys(renderers).length, 1],
+	cells: (x: number, _y: number) => {
+		const key = Object.keys(renderers)[x];
+
+		return {
+			title: key.charAt(0).toUpperCase() + key.slice(1),
+			value: key
+		}
+	},
+	value: currentRenderer
+}) as EssentialsPlugin.RadioGridApi<string>).on('change', (e) => {
+	currentRenderer = e.value;
 	renderer.destroy();
-	renderer = rendererFactory.createRenderer(device, renderers[currentRendererIdx].type);
+	renderer = rendererFactory.createRenderer(device, scene, renderers[currentRenderer]);
 	renderer.finalize(device, scene);
 	
 	renderer.controlPanes(controlsFolder, device);

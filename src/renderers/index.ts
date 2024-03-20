@@ -1,3 +1,3 @@
 export * from './sorted'
-export * from './basic'
+export * from './clipped'
 export * from './renderer'

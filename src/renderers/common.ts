@@ -1,6 +1,6 @@
 import { StructuredView, makeShaderDataDefinitions, makeStructuredView } from "webgpu-utils";
-import sharedShaderCode from '../shaders/shared.wgsl?raw';
-import sharedRasterizeShaderCode from '../shaders/sharedRasterize.wgsl?raw';
+import sharedShaderCode from '@shaders/shared.wgsl?raw';
+import sharedRasterizeShaderCode from '@shaders/sharedRasterize.wgsl?raw';
 
 export default class CommonRendererData {
 	cameraUniformsLayoutEntry: GPUBindGroupLayoutEntry;

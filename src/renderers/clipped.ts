@@ -3,14 +3,14 @@ import GPUTimer from "../GPUTimer";
 import { Renderer } from "./renderer";
 import CommonRendererData from "./common";
 
-import sharedShaderCode from '../shaders/shared.wgsl?raw';
-import sharedRasterizeShaderCode from '../shaders/sharedRasterize.wgsl?raw';
-import basicRasterizeShaderCode from '../shaders/basicRasterize.wgsl?raw';
+import sharedShaderCode from '@shaders/shared.wgsl?raw';
+import sharedRasterizeShaderCode from '@shaders/sharedRasterize.wgsl?raw';
+import basicRasterizeShaderCode from '@shaders/basicRasterize.wgsl?raw';
 import Scene from "../scene";
 import { Camera } from "../cameraControls";
 import { Pane } from "tweakpane";
 
-export class BasicRenderer extends Renderer {
+export class ClippedRenderer extends Renderer {
 	#rasterShader: GPUShaderModule;
 	#renderPassDescriptor: GPURenderPassDescriptor;
 	#depthFormat: GPUTextureFormat = "depth32float";
@@ -70,7 +70,6 @@ export class BasicRenderer extends Renderer {
 	}
 
 	finalize(device: GPUDevice, scene: Scene) {
-		
 		const secondaryRenderBindGroupLayout = device.createBindGroupLayout({
 			entries: [{
 				binding: 0,
@@ -182,6 +181,7 @@ export class BasicRenderer extends Renderer {
 
 	destroy() {
 		this.#timer.destroy();
+		this.#thresholdControlsBuffer.destroy();
 		this.#thresholdControlsBinding?.dispose();
 		this.#renderingTelemetryBinding?.dispose();
 	}

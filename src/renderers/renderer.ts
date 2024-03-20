@@ -22,13 +22,16 @@ export abstract class Renderer {
 export type rendererConstructor<T extends Renderer> = new(device: GPUDevice, common: CommonRendererData, ...args: any[]) => T;
 export default class RendererFactory {
 	#commonData: CommonRendererData;
+	get commonData() { return this.#commonData; };
 
 	constructor(device: GPUDevice, canvasContext: GPUCanvasContext) {
 		this.#commonData = new CommonRendererData(device, canvasContext);
 	}
 
-	createRenderer<T extends Renderer>(device: GPUDevice, type: rendererConstructor<T>, ...args: any[]): T {
-		return new type(device, this.#commonData, ...args);
+	createRenderer<T extends Renderer>(device: GPUDevice, scene: Scene, type: rendererConstructor<T>, ...args: any[]): T {
+		const renderer =  new type(device, this.#commonData, ...args);
+		renderer.finalize(device, scene);
+		return renderer;
 	}
 
 	destroy() {
