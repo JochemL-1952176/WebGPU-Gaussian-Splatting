@@ -21,22 +21,27 @@ function importThresholdMaps(files: string[]) {
 	return ret.sort(({key: keyA}, {key: keyB}) => keyA - keyB);
 }
 
-const thresholdMaps = [
-	importThresholdMaps(Object.keys(import.meta.glob('@assets/bayer/*.png', { query: '?url', import: "default" }))),
-	importThresholdMaps(Object.keys(import.meta.glob('@assets/blueNoise/*.png', { query: '?url', import: "default" })))
-];
-
-const selectedThresholdMap = {
-	type: 0,
-	size: 1,
+const thresholdMaps = {
+	bayer: importThresholdMaps(Object.keys(import.meta.glob('@assets/bayer/*.png', { query: '?url', import: "default" }))),
+	blueNoise: importThresholdMaps(Object.keys(import.meta.glob('@assets/blueNoise/*.png', { query: '?url', import: "default" })))
 };
 
-function loadSelectedAsBitmap() {
-	return fetch(thresholdMaps[selectedThresholdMap.type][selectedThresholdMap.size].dir)
+type thresholdMapType = keyof typeof thresholdMaps;
+
+const selectedThresholdMap = {
+	type: "bayer" as thresholdMapType,
+	size: 0,
+};
+
+function loadBitmap(type: thresholdMapType, size: number) {
+	selectedThresholdMap.type = type;
+	selectedThresholdMap.size = size;
+
+	return fetch(thresholdMaps[type][size].dir)
 	.then(async response => response.blob())
 	.then(blob => createImageBitmap(blob));
 }
-const thresholdImage = await loadSelectedAsBitmap();
+let thresholdImage = await loadBitmap(selectedThresholdMap.type, selectedThresholdMap.size);
 
 const medianFilterSettings = {
 	enabled: false,
@@ -71,6 +76,7 @@ export class StochasticRenderer extends Renderer {
 		filter: 0
 	};
 	
+	#thresholdMapTypeSelectionBinding?: RadioGridApi<thresholdMapType>;
 	#bayerMapSelectionBinding?: RadioGridApi<number>;
 	#blueNoiseMapSelectionBinding?: RadioGridApi<number>;
 	#medianFilterToggleBinding?: BindingApi<unknown, boolean>;
@@ -242,34 +248,80 @@ export class StochasticRenderer extends Renderer {
 	}
 
 	controlPanes(root: FolderApi | Pane, device: GPUDevice): void {
-		this.#bayerMapSelectionBinding = root.addBlade({
+		const thresholdMapTypes = Object.keys(thresholdMaps) as Array<thresholdMapType>;
+
+		this.#thresholdMapTypeSelectionBinding = root.addBlade({
 			view: 'radiogrid',
 			groupName: 'thresholdMap',
+			label: "Threshold map type",
+			size: [thresholdMapTypes.length, 1],
+			cells: (x: number, _y: number) => {
+				const value = thresholdMapTypes[x];
+				const title = value.split(/(?=[A-Z])/)
+					.map(w => w.charAt(0).toUpperCase() + w.slice(1))
+					.join(' ')
+
+				return { value, title }
+			},
+			value: selectedThresholdMap.type
+		});
+
+		this.#bayerMapSelectionBinding = root.addBlade({
+			view: 'radiogrid',
+			groupName: 'BayerThresholdMap',
 			label: 'Bayer',
-			size: [thresholdMaps[0].length, 1],
+			size: [thresholdMaps.bayer.length, 1],
 			cells: (x: number, _y: number) => ({
 				value: x,
-				title: thresholdMaps[0][x].key
+				title: thresholdMaps.bayer[x].key
 			}),
-			value: selectedThresholdMap.type == 0 ? selectedThresholdMap.size : -1
+			value: selectedThresholdMap.size
 		}) as RadioGridApi<number>;
 
 		this.#blueNoiseMapSelectionBinding = root.addBlade({
 			view: 'radiogrid',
-			groupName: 'thresholdMap',
+			groupName: 'blueNoisethresholdMap',
 			label: 'Blue noise',
-			size: [thresholdMaps[1].length, 1],
+			size: [thresholdMaps.blueNoise.length, 1],
 			cells: (x: number, _y: number) => ({
 				value: x,
-				title: thresholdMaps[1][x].key
+				title: thresholdMaps.blueNoise[x].key
 			}),
-			value: selectedThresholdMap.type == 1 ? selectedThresholdMap.size : -1,
+			value: selectedThresholdMap.size
 		}) as RadioGridApi<number>;
+
+		this.#bayerMapSelectionBinding.hidden = selectedThresholdMap.type !== "bayer";
+		this.#blueNoiseMapSelectionBinding.hidden = selectedThresholdMap.type !== "blueNoise";
+
+		this.#thresholdMapTypeSelectionBinding!.on('change', (e) => {
+			selectedThresholdMap.type = e.value;
+
+			if (selectedThresholdMap.type === "bayer") {
+				this.#bayerMapSelectionBinding!.hidden = false;
+				this.#blueNoiseMapSelectionBinding!.hidden = true;
+				selectedThresholdMap.size = this.#bayerMapSelectionBinding!.value.rawValue;
+			}
+			
+			if (selectedThresholdMap.type === "blueNoise") {
+				this.#bayerMapSelectionBinding!.hidden = true;
+				this.#blueNoiseMapSelectionBinding!.hidden = false;
+				selectedThresholdMap.size = this.#blueNoiseMapSelectionBinding!.value.rawValue;
+			}
+			loadBitmap(selectedThresholdMap.type, selectedThresholdMap.size).then(image => this.#setThresholdMap(device, image));
+		})
+
+		this.#bayerMapSelectionBinding.on('change', (e) => {
+			loadBitmap("bayer", e.value).then(image => this.#setThresholdMap(device, image));
+		});
+
+		this.#blueNoiseMapSelectionBinding.on('change', (e) => {
+			loadBitmap("blueNoise", e.value).then(image => this.#setThresholdMap(device, image));
+		});
 
 		this.#medianFilterToggleBinding = root.addBinding(medianFilterSettings, 'enabled', { label: "Median filter" });
 		this.#medianFilterSizeBinding = root.addBinding(medianFilterSettings, 'size', {
 			label: "Filter size",
-			disabled: !medianFilterSettings.enabled,
+			hidden: !medianFilterSettings.enabled,
 			options: {
 				"3x3": 3,
 				"5x5": 5,
@@ -277,27 +329,10 @@ export class StochasticRenderer extends Renderer {
 				"9x9": 9,
 			}
 		});
-
-		this.#bayerMapSelectionBinding.on('change', (e) => {
-			selectedThresholdMap.type = 0;
-			selectedThresholdMap.size = e.value;
-			loadSelectedAsBitmap().then(image => this.#setThresholdMap(device, image));
-		});
-
-		this.#blueNoiseMapSelectionBinding.on('change', (e) => {
-			selectedThresholdMap.type = 1;
-			selectedThresholdMap.size = e.value;
-			loadSelectedAsBitmap().then(image => this.#setThresholdMap(device, image));
-		});
 		
 		this.#medianFilterToggleBinding.on('change', (e) => {
-			if (this.#filterTelemetryBinding) {
-				this.#filterTelemetryBinding.disabled = !e.value;
-			}
-
-			if (this.#medianFilterSizeBinding) {
-				this.#medianFilterSizeBinding.disabled = !e.value
-			}
+				this.#filterTelemetryBinding!.hidden = !e.value
+				this.#medianFilterSizeBinding!.hidden = !e.value
 		});
 
 		this.#medianFilterSizeBinding.on('change', () => {
@@ -317,7 +352,7 @@ export class StochasticRenderer extends Renderer {
 		
 		this.#filterTelemetryBinding = root.addBinding(this.#telemetry, 'filter', {
 			readonly: true,
-			disabled: !medianFilterSettings.enabled,
+			hidden: !medianFilterSettings.enabled,
 			view: 'graph',
 			label: 'Median filter time',
 			format: (v: number) => `${v.toFixed(2)}μs`,
@@ -381,6 +416,7 @@ export class StochasticRenderer extends Renderer {
 	}
 
 	#setThresholdMap(device: GPUDevice, image: ImageBitmap) {
+		thresholdImage = image;
 		this.#thresholdTexture.destroy();
 		this.#thresholdTexture = createTextureFromSource(device, image, {
 			usage: GPUTextureUsage.TEXTURE_BINDING
@@ -400,6 +436,7 @@ export class StochasticRenderer extends Renderer {
 	destroy() {
 		this.#timer.destroy();
 		this.#thresholdTexture.destroy();
+		this.#thresholdMapTypeSelectionBinding?.dispose();
 		this.#bayerMapSelectionBinding?.dispose();
 		this.#blueNoiseMapSelectionBinding?.dispose();
 		this.#medianFilterToggleBinding?.dispose();
