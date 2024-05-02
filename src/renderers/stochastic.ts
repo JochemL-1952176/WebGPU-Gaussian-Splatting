@@ -13,7 +13,7 @@ import { RadioGridApi } from "@tweakpane/plugin-essentials";
 import { createTextureFromSource } from "webgpu-utils";
 
 function importThresholdMaps(files: string[]) {
-	const ret =files.map((value: string) => ({
+	const ret = files.map((value: string) => ({
 		dir: value,
 		key: parseInt(value.slice(value.lastIndexOf('/') + 1, value.lastIndexOf('.')))
 	}));
@@ -39,12 +39,12 @@ function loadSelectedAsBitmap() {
 const thresholdImage = await loadSelectedAsBitmap();
 
 const medianFilterSettings = {
-	enabled: false
+	enabled: false,
+	size: 3,
 }
 
 export class StochasticRenderer extends Renderer {
 	#rasterShader: GPUShaderModule;
-	#filterShader: GPUShaderModule;
 	#renderPassDescriptor: GPURenderPassDescriptor;
 	#depthFormat: GPUTextureFormat = "depth32float";
 	#renderFormat: GPUTextureFormat;
@@ -71,9 +71,10 @@ export class StochasticRenderer extends Renderer {
 		filter: 0
 	};
 	
-	#medianFilterSettingsBinding?: BindingApi<unknown, boolean>;
 	#bayerMapSelectionBinding?: RadioGridApi<number>;
 	#blueNoiseMapSelectionBinding?: RadioGridApi<number>;
+	#medianFilterToggleBinding?: BindingApi<unknown, boolean>;
+	#medianFilterSizeBinding?: BindingApi<unknown, number>;
 	#renderingTelemetryBinding?: BindingApi<unknown, number>;
 	#filterTelemetryBinding?: BindingApi<unknown, number>;
 	
@@ -85,7 +86,6 @@ export class StochasticRenderer extends Renderer {
 
 		const rasterCode = sharedShaderCode + sharedRasterizeShaderCode + stochasticRasterizeShaderCode;
 		this.#rasterShader = device.createShaderModule({ code: rasterCode });
-		this.#filterShader = device.createShaderModule({ code: filterShaderCode });
 
 		this.#depthBuffer = device.createTexture({
 			format: this.#depthFormat,
@@ -145,24 +145,7 @@ export class StochasticRenderer extends Renderer {
 				resource: unsetRenderTarget
 			}]
 		};
-
-		const filterPipelineLayout = device.createPipelineLayout({
-			label: "Filter pipeline layout",
-			bindGroupLayouts: [this.#filterBindGroupLayout]
-		});
 		
-		this.#filterRenderPipeline = device.createRenderPipeline({
-			label: "Filter pipeline",
-			primitive: { topology: "triangle-list" },
-			layout: filterPipelineLayout,
-			vertex: { module: this.#filterShader, entryPoint: "vs" },
-			fragment: {
-				module: this.#filterShader,
-				entryPoint: "fs",
-				targets: [{ format: this.#renderFormat }]
-			}
-		});
-
 		this.#filterRenderpassDescriptor = {
 			colorAttachments: [{
 				view: unsetRenderTarget,
@@ -173,6 +156,7 @@ export class StochasticRenderer extends Renderer {
 		};
 
 		this.setSize(device, this.common.canvasContext.canvas.width, this.common.canvasContext.canvas.height);
+		this.#buildFilterRenderPipeline(device);
 	}
 
 	finalize(device: GPUDevice, scene: Scene) {
@@ -282,11 +266,15 @@ export class StochasticRenderer extends Renderer {
 			value: selectedThresholdMap.type == 1 ? selectedThresholdMap.size : -1,
 		}) as RadioGridApi<number>;
 
-		this.#medianFilterSettingsBinding = root.addBinding(medianFilterSettings, 'enabled', { label: "Median filter" })
-
-		this.#medianFilterSettingsBinding.on('change', (e) => {
-			if (this.#filterTelemetryBinding) {
-				this.#filterTelemetryBinding.disabled = !e.value;
+		this.#medianFilterToggleBinding = root.addBinding(medianFilterSettings, 'enabled', { label: "Median filter" });
+		this.#medianFilterSizeBinding = root.addBinding(medianFilterSettings, 'size', {
+			label: "Filter size",
+			disabled: !medianFilterSettings.enabled,
+			options: {
+				"3x3": 3,
+				"5x5": 5,
+				"7x7": 7,
+				"9x9": 9,
 			}
 		});
 
@@ -300,6 +288,20 @@ export class StochasticRenderer extends Renderer {
 			selectedThresholdMap.type = 1;
 			selectedThresholdMap.size = e.value;
 			loadSelectedAsBitmap().then(image => this.#setThresholdMap(device, image));
+		});
+		
+		this.#medianFilterToggleBinding.on('change', (e) => {
+			if (this.#filterTelemetryBinding) {
+				this.#filterTelemetryBinding.disabled = !e.value;
+			}
+
+			if (this.#medianFilterSizeBinding) {
+				this.#medianFilterSizeBinding.disabled = !e.value
+			}
+		});
+
+		this.#medianFilterSizeBinding.on('change', () => {
+			this.#buildFilterRenderPipeline(device);
 		});
 	};
 
@@ -340,7 +342,32 @@ export class StochasticRenderer extends Renderer {
 		this.#renderBundle = renderPassEncoder.finish();
 	}
 
+	#buildFilterRenderPipeline(device: GPUDevice) {
+		const CorrectfilterShaderCode = filterShaderCode.replaceAll('FILTERSIZE', medianFilterSettings.size.toString());
+		const filterShader = device.createShaderModule({ code: CorrectfilterShaderCode });
+		const filterPipelineLayout = device.createPipelineLayout({
+			label: "Filter pipeline layout",
+			bindGroupLayouts: [this.#filterBindGroupLayout]
+		});
+
+		this.#filterRenderPipeline = device.createRenderPipeline({
+			label: "Filter pipeline",
+			primitive: { topology: "triangle-list" },
+			layout: filterPipelineLayout,
+			vertex: { module: filterShader, entryPoint: "vs" },
+			fragment: {
+				module: filterShader,
+				entryPoint: "fs",
+				targets: [{ format: this.#renderFormat }]
+			}
+		});
+
+		this.#buildFilterRenderBundle(device);
+	}
+
 	#buildFilterRenderBundle(device: GPUDevice) {
+		if (!this.#filterRenderPipeline) return;
+
 		const filterBindGroup = device.createBindGroup(this.#filterBindGroupDescriptor);
 		const renderPassEncoder = device.createRenderBundleEncoder({
 			colorFormats: [this.#renderFormat]
@@ -375,7 +402,9 @@ export class StochasticRenderer extends Renderer {
 		this.#thresholdTexture.destroy();
 		this.#bayerMapSelectionBinding?.dispose();
 		this.#blueNoiseMapSelectionBinding?.dispose();
+		this.#medianFilterToggleBinding?.dispose();
+		this.#medianFilterSizeBinding?.dispose();
 		this.#renderingTelemetryBinding?.dispose();
-		this.#medianFilterSettingsBinding?.dispose();
+		this.#filterTelemetryBinding?.dispose();
 	}
 }

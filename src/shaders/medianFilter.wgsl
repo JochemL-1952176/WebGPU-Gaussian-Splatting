@@ -10,19 +10,21 @@ const fullscreenTri = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
 }
 
 @group(0) @binding(0) var renderResult: texture_2d<f32>;
+const halfFilterSize = FILTERSIZE / 2;
+const windowSize = FILTERSIZE * FILTERSIZE;
 
 @fragment fn fs(in: VertexOut) -> @location(0) vec4f {
 	let size = vec2<i32>(textureDimensions(renderResult));
 	let center = vec2<i32>(in.pos.xy);
-	var window = array<vec3f, 9>();
-	var windowGray = array<f32, 9>();
+	var window = array<vec3f, windowSize>();
+	var windowGray = array<f32, windowSize>();
 	var collectedSamples = 0;
 
-	for (var v = -1; v < 1; v++) {
+	for (var v = -halfFilterSize; v < halfFilterSize; v++) {
 		let sampleV = center.y - v;
 		if (sampleV < 0 || sampleV >= size.y) { continue; };
 
-		for (var u = -1; u < 1; u++) {
+		for (var u = -halfFilterSize; u < halfFilterSize; u++) {
 			let sampleU = center.x - u;
 			if (sampleU < 0 || sampleU >= size.x) { continue; };
 
