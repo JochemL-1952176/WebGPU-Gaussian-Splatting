@@ -9,6 +9,7 @@ import { ListBladeApi, Pane } from 'tweakpane';
 import * as EssentialsPlugin from '@tweakpane/plugin-essentials';
 import { ClippedRenderer, SortingRenderer } from './renderers';
 import { StochasticRenderer } from './renderers/stochastic';
+import { WeightedBlendedRenderer } from './renderers/weightedBlended';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -40,6 +41,7 @@ const renderers: Record<string, rendererConstructor<Renderer>> = {
 	sorted: SortingRenderer,
 	clipped:  ClippedRenderer,
 	stochastic: StochasticRenderer,
+	"WBOIT": WeightedBlendedRenderer
 };
 
 let currentRenderer = "sorted";

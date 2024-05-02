@@ -1,10 +1,10 @@
 struct VertexOut {
-	@builtin(position) pos : vec4f
+	@builtin(position) pos: vec4f
 }
 
 const fullscreenTri = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3)); 
 @vertex fn vs(@builtin(vertex_index) vertexIndex: u32) -> VertexOut {
-	var output	: VertexOut;
+	var output: VertexOut;
 	output.pos = vec4(fullscreenTri[vertexIndex], 0, 1);
 	return output;
 }
