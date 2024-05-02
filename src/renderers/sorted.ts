@@ -2,7 +2,7 @@ import { BindingApi, FolderApi } from "@tweakpane/core";
 import GPUTimer from "../GPUTimer";
 import SplatSorter from "../sorter";
 import { Renderer } from "./renderer";
-import CommonRendererData from "./common";
+import CommonRendererData, { unsetRenderTarget } from "./common";
 import Scene from "../scene";
 
 import sharedShaderCode from '@shaders/shared.wgsl?raw';
@@ -37,7 +37,7 @@ export class SortingRenderer extends Renderer {
 		
 		this.#renderPassDescriptor = {
 			colorAttachments: [{
-				view: this.common.canvasContext.getCurrentTexture().createView(),
+				view: unsetRenderTarget,
 				loadOp: "clear",
 				clearValue: [0, 0, 0, 0],
 				storeOp: "store",

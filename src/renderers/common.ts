@@ -2,6 +2,8 @@ import { StructuredView, makeShaderDataDefinitions, makeStructuredView } from "w
 import sharedShaderCode from '@shaders/shared.wgsl?raw';
 import sharedRasterizeShaderCode from '@shaders/sharedRasterize.wgsl?raw';
 
+export const unsetRenderTarget = null as unknown as GPUTextureView
+
 export default class CommonRendererData {
 	cameraUniformsLayoutEntry: GPUBindGroupLayoutEntry;
 	controlsUniformsLayoutEntry: GPUBindGroupLayoutEntry;

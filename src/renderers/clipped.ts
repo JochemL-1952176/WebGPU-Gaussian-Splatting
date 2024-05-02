@@ -1,7 +1,7 @@
 import { BindingApi, FolderApi } from "@tweakpane/core";
 import GPUTimer from "../GPUTimer";
 import { Renderer } from "./renderer";
-import CommonRendererData from "./common";
+import CommonRendererData, { unsetRenderTarget } from "./common";
 
 import sharedShaderCode from '@shaders/shared.wgsl?raw';
 import sharedRasterizeShaderCode from '@shaders/sharedRasterize.wgsl?raw';
@@ -44,13 +44,13 @@ export class ClippedRenderer extends Renderer {
 
 		this.#renderPassDescriptor = {
 			colorAttachments: [{
-				view: this.common.canvasContext.getCurrentTexture().createView(),
+				view: unsetRenderTarget,
 				loadOp: "clear",
 				clearValue: [0, 0, 0, 0],
 				storeOp: "store",
 			}],
 			depthStencilAttachment: {
-				view: this.#depthBuffer.createView(),
+				view: unsetRenderTarget,
 				depthClearValue: 1.0,
 				depthLoadOp: "clear",
 				depthStoreOp: "store"
