@@ -60,6 +60,7 @@ struct FragmentOut {
 	if (power > 0) { discard; }
 
 	let alpha = min(1, in.opacity * exp(power));
+	if (alpha < 1.0 / 255) { discard; }
 
 	var out = FragmentOut();
 	out.accumulate = vec4f(in.color, 1) * alpha * in.weight;

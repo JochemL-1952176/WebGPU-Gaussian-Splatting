@@ -5,6 +5,7 @@
 }
 
 body, html {
+	height: 100%;
 	padding: 0;
 	overflow: hidden;
 	background-color: black;
@@ -14,4 +15,11 @@ body, html {
 	position: absolute;
 	left: 8px;
 	top: 8px;
+}
+
+#root {
+	height: 100%;
+	display: flex;
+	justify-content: center;
+	align-items: center;
 }

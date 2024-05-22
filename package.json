@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@tweakpane/plugin-essentials": "^0.2.1",
+    "file-saver": "^2.0.5",
+    "jszip": "^3.10.1",
     "tweakpane": "^4.0.3",
     "webgpu-utils": "^1.0.2",
     "wgpu-matrix": "^2.5.1"

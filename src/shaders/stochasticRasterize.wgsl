@@ -52,11 +52,12 @@ struct VertexOut {
 	if (power > 0) { discard; }
 
 	let alpha = min(1, in.opacity * exp(power));
+	if (alpha < 1.0 / 255) { discard; }
 
 	let size = textureDimensions(thresholdMap);
 	let coords = vec2<u32>(in.uv + in.radius) % size;
 
-	if (alpha < 1.0 / 255 || alpha < textureLoad(thresholdMap, coords, 0).x) { discard; }
+	if (alpha < textureLoad(thresholdMap, coords, 0).x) { discard; }
 
 
 	return vec4f(in.color, 1);

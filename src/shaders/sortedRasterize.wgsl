@@ -55,6 +55,7 @@ struct VertexOut {
 	if (power > 0) { discard; }
 
 	let alpha = min(1, in.opacity * exp(power));
+	if (alpha < 1.0 / 255) { discard; }
 
 	return vec4f(in.color, alpha);
 }

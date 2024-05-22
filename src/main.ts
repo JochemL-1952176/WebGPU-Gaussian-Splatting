@@ -10,6 +10,8 @@ import * as EssentialsPlugin from '@tweakpane/plugin-essentials';
 import { ClippedRenderer, SortingRenderer } from './renderers';
 import { StochasticRenderer } from './renderers/stochastic';
 import { WeightedBlendedRenderer } from './renderers/weightedBlended';
+import JSZip from 'jszip';
+import FileSaver from 'file-saver';
 
 if (!navigator.gpu) { throw new Error("WebGPU not supported in this browser"); }
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -34,14 +36,14 @@ const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 context.configure({
 	device: device,
 	format: canvasFormat,
-	alphaMode: "premultiplied"
+	alphaMode: "opaque"
 });
 
 const renderers: Record<string, rendererConstructor<Renderer>> = {
 	sorted: SortingRenderer,
 	clipped:  ClippedRenderer,
 	stochastic: StochasticRenderer,
-	"WBOIT": WeightedBlendedRenderer
+	WBOIT: WeightedBlendedRenderer
 };
 
 let currentRenderer = "sorted";
@@ -85,13 +87,25 @@ function frame() {
 	// TELEMETRY
 	telemetry.frameTime = deltaTime;
 	telemetry.jsTime = performance.now() - frameStart;
-
-	requestAnimationFrame(frame);
 };
 
 function onResize() {
 	canvas.width = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth;
 	canvas.height = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight;
+	if (scene.cameras) {
+		const { width, height } = scene.cameras[cameraSelection.value];
+		const widthRatio = canvas.width / width;
+		const heightRatio = canvas.height / height;
+		const scale = Math.min(widthRatio, heightRatio);
+		if (scale > 1) {
+			canvas.width = width;
+			canvas.height = height;
+		} else {
+			canvas.width = width * scale;
+			canvas.height = height * scale;
+		}
+	}
+
 	renderer.setSize(device, canvas.width, canvas.height);
 	imageSize.refresh();
 
@@ -145,6 +159,7 @@ plyInput.onchange = async (_) => {
 		renderer.finalize(device, scene);
 
 		cameraSelection.hidden = true;
+		benchmarkButton.disabled = true;
 	}
 	plyInput.value = "";
 };
@@ -152,8 +167,9 @@ plyInput.onchange = async (_) => {
 function setActiveCamera(idx: number) {
 	console.assert(scene.cameras !== undefined, "No cameras loaded");
 	console.assert(idx >= 0 && idx < scene.cameras!.length, "Camera index out of bounds");
+	onResize();
 
-	controls.setPose(scene.cameras![idx].position, scene.cameras![idx].rotation);
+	controls.setPose(scene.cameras![idx].position, scene.cameras![idx].rotation, cameraControls.immediate);
 
 	const fy = canvas.height * (scene.cameras![idx].fy / scene.cameras![idx].height);
 	const fx = canvas.width * (scene.cameras![idx].fx / scene.cameras![idx].width);
@@ -165,6 +181,7 @@ function setActiveCamera(idx: number) {
 	
 	camera.set({tanHalfFov, focal});
 	camera.recalculateProjectionMatrix();
+	cameraSelection.value = idx
 	cameraFolder.refresh();
 }
 
@@ -174,8 +191,9 @@ cameraInput.onchange = async (_) => {
 
 		cameraSelection.options = scene.cameras.map((cam, idx) => ({ text: cam.img_name, value: idx }));
 		cameraSelection.hidden = false;
-
+		cameraSelection.value = 0;
 		setActiveCamera(0);
+		benchmarkButton.disabled = false;
 	}
 	cameraInput.value = "";
 };
@@ -266,6 +284,12 @@ telemetryFolder.addBinding(telemetry, 'jsTime', {
 
 const cameraFolder = pane.addFolder({ title: "Camera" });
 
+const cameraControls = {
+	immediate: false
+};
+
+cameraFolder.addBinding(cameraControls, 'immediate', { label: "Immediate transition"});
+
 const cameraSelection = cameraFolder.addBlade({
 	view: 'list',
 	label: 'camera',
@@ -313,5 +337,52 @@ cameraFolder.addBinding(camera, 'far', {
 renderer.controlPanes(controlsFolder, device);
 renderer.telemetryPanes(telemetryFolder, GRAPHREFRESHINTERVAL);
 
+const benchmarkButton = pane.addButton({
+	title: "Benchmark",
+	disabled: true,
+});
+
+let benchmarkRunning = false;
+benchmarkButton.on('click', async () => {
+	const previousImmediateSetting = cameraControls.immediate;
+	const nSamples = 31;
+	const zip = new JSZip()
+	cameraControls.immediate = true;
+	benchmarkRunning = true;
+	const timings: Record<string, number[]> = {}
+
+	for (let i = 0; i < scene.cameras!.length; i++) {
+		setActiveCamera(i);
+		// Assure front and back buffers have same image
+		for (let j = 0; j < 2; j++) { frame(); }
+		const image = new Image()
+		image.src = canvas.toDataURL("image/png")
+		zip.file(`images/${scene.cameras![i].img_name}.png`, image.src.slice(image.src.indexOf(',') + 1), {base64: true});
+
+		timings[scene.cameras![i].img_name] = []
+		for (let n = 0; n < nSamples; n++) {
+			const start = performance.now();
+			frame();
+			await device.queue.onSubmittedWorkDone();
+			if (n > 0) timings[scene.cameras![i].img_name].push(performance.now() - start)
+		}
+	}
+	
+	zip.file('timings.json', JSON.stringify(timings))
+	zip.generateAsync({ type: 'blob' }).then(function (content) {
+		FileSaver.saveAs(content, 'benchmark.zip');
+	});
+	benchmarkRunning = false;
+	cameraControls.immediate = previousImmediateSetting;
+	loop();
+});
+
 onResize();
-requestAnimationFrame(frame);
+
+function loop() {
+	if (benchmarkRunning) return;
+	frame();
+	requestAnimationFrame(loop);
+}
+
+loop();

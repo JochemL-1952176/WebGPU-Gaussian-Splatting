@@ -154,6 +154,7 @@ export default class TrackballControls {
 
 	update() {
 		if (this.#stateFlags === TrackballState.NONE) return;
+		const preUpdateState: any = this.#stateFlags;
 		
 		if (isFlagSet(this.#stateFlags, TrackballState.INTERPOLATING)) {
 			if (!this.#interpolatePose()) 
@@ -171,7 +172,7 @@ export default class TrackballControls {
 			this.#position = vec3.add(this.#lookAt, this.#eye);
 		}
 
-		if (this.#stateFlags !== TrackballState.NONE) {
+		if (preUpdateState !== TrackballState.NONE) {
 			mat4.lookAt(
 				this.#position,
 				this.#lookAt,
@@ -241,10 +242,10 @@ export default class TrackballControls {
 		return true;
 	}
 
-	#interpolatePose(): boolean {
+	#interpolatePose(earlyOut: boolean = true): boolean {
 		const deltaPos = vec3.sub(this.#targetPosition, this.#position);
 
-		if (vec3.len(deltaPos) < EPSILON) {
+		if (earlyOut && vec3.len(deltaPos) < EPSILON) {
 			vec3.clone(this.#targetPosition, this.#position);
 			quat.clone(this.#targetOrientation, this.#currentOrientation);
 			return false;
@@ -292,10 +293,17 @@ export default class TrackballControls {
 		return projection;
 	}
 
-	setPose(position: Vec3, rotation: Mat3) {
+	setPose(position: Vec3, rotation: Mat3, immediate: boolean = false) {
 		vec3.clone(position, this.#targetPosition);
 		quat.fromMat(rotation, this.#targetOrientation);
 		quat.inverse(this.#targetOrientation, this.#targetOrientation);
+
+		if (immediate) {
+			vec3.clone(this.#targetPosition, this.#position);
+			quat.clone(this.#targetOrientation, this.#currentOrientation);
+			this.#interpolatePose(false);
+		}
+		
 		this.#stateFlags = TrackballState.INTERPOLATING;
 	}
 }
