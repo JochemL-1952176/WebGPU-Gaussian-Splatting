@@ -345,7 +345,7 @@ const benchmarkButton = pane.addButton({
 let benchmarkRunning = false;
 benchmarkButton.on('click', async () => {
 	const previousImmediateSetting = cameraControls.immediate;
-	const nSamples = 31;
+	const nSamples = 30;
 	const zip = new JSZip()
 	cameraControls.immediate = true;
 	benchmarkRunning = true;
@@ -353,19 +353,24 @@ benchmarkButton.on('click', async () => {
 
 	for (let i = 0; i < scene.cameras!.length; i++) {
 		setActiveCamera(i);
-		// Assure front and back buffers have same image
-		for (let j = 0; j < 2; j++) { frame(); }
-		const image = new Image()
-		image.src = canvas.toDataURL("image/png")
-		zip.file(`images/${scene.cameras![i].img_name}.png`, image.src.slice(image.src.indexOf(',') + 1), {base64: true});
+		//warmup
+		for (let n = 0; n < 10; n++) {
+			frame();
+			await device.queue.onSubmittedWorkDone();
+		}
 
 		timings[scene.cameras![i].img_name] = []
+
 		for (let n = 0; n < nSamples; n++) {
 			const start = performance.now();
 			frame();
 			await device.queue.onSubmittedWorkDone();
-			if (n > 0) timings[scene.cameras![i].img_name].push(performance.now() - start)
+			timings[scene.cameras![i].img_name].push(performance.now() - start)
 		}
+
+		const image = new Image()
+		image.src = canvas.toDataURL("image/png")
+		zip.file(`images/${scene.cameras![i].img_name}.png`, image.src.slice(image.src.indexOf(',') + 1), {base64: true});
 	}
 	
 	zip.file('timings.json', JSON.stringify(timings))
